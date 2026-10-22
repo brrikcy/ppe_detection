@@ -184,10 +184,34 @@ def test_newcomer_is_checked_on_arrival(tmp_path):
 
     a = PPEAnalyzer(make_cfg(crop_padding=0.0, required_ppe=["helmet"]), model=Counting())
     people = FakePeople(lambda i: [(1, LEFT)] + ([(2, RIGHT)] if i >= 2 else []))
-    process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: people)
+    report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: people)
     a.close()
     # Right-hand queries: frame 2 (on arrival), then frames 10 and 20.
     assert sum(calls) == 3
+    # The arrival check is in the report, holding only the newcomer.
+    arrivals = [e for e in report["timeline"] if e["arrival"]]
+    assert [(e["frame"], [w["track_id"] for w in e["workers"]]) for e in arrivals] == [(2, [2])]
+    assert arrivals[0]["workers"][0]["violations"] == ["No Helmet"]
+    assert report["frames_analysed"] == 3 and report["arrival_checks"] == 1
+
+
+def test_worker_who_leaves_before_next_check_is_reported(tmp_path):
+    # Worker 2 is only on screen for frames 2-6, between the checks at 0 and 10.
+    src = write_video(tmp_path / "in.mp4")
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0, required_ppe=["helmet"]), model=FakeModel())
+    people = FakePeople(lambda i: [(1, LEFT)] + ([(2, RIGHT)] if 2 <= i <= 6 else []))
+    report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: people)
+    a.close()
+
+    from app.services.summary import build_summary
+
+    s = build_summary(report["timeline"])
+    people_ids = {p.id: p for p in s.people}
+    assert people_ids[2].checks == 1 and people_ids[2].status_label == "PPE Violation (1) - No Helmet"
+    assert [e.track_id for e in s.events] == [2]
+    assert s.frames_analysed == 3 and s.arrival_checks == 1
+    # The timeline chart only has the regular checks, where worker 2 isn't on screen.
+    assert [(p.time_sec, p.workers, p.violations) for p in s.timeline] == [(0, 1, 0), (1, 1, 0), (2, 1, 0)]
 
 
 def test_failed_check_is_skipped_not_repeated(tmp_path):
@@ -212,7 +236,8 @@ def test_failed_check_is_skipped_not_repeated(tmp_path):
     finally:
         analyzer_mod._with_retries = real_retries
     # The first check failed, so there is no entry for frame 0 (rather than a stale copy).
-    assert [e["frame"] for e in report["timeline"]] == [10, 20]
+    # Nobody has a verdict yet, so frame 1 checks them as newcomers.
+    assert [(e["frame"], e["arrival"]) for e in report["timeline"]] == [(1, True), (10, False), (20, False)]
 
 
 def test_tags_do_not_overlap():

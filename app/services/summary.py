@@ -74,8 +74,12 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
     points, events = [], []
     worker_checks = violation_checks = frames_with_violation = peak = too_small = 0
 
+    regular = 0
     for entry in timeline:
         workers = entry["workers"]
+        # Arrival checks hold only newcomers: they count as checks, but aren't a point in time
+        # with everyone on screen, so they stay out of the timeline and per-frame figures.
+        arrival = entry.get("arrival", False)
         n_bad = 0
         for i, w in enumerate(workers):
             if w.get("too_small"):
@@ -100,15 +104,20 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
             ))
         worker_checks += sum(not w.get("too_small") for w in workers)
         violation_checks += n_bad
+        if arrival:
+            continue
+        regular += 1
         frames_with_violation += bool(n_bad)
         peak = max(peak, len(workers))
-        points.append(TimelinePoint(time_sec=entry["time_sec"], workers=len(workers), violations=n_bad))
+        points.append(TimelinePoint(time_sec=entry["time_sec"], workers=len(workers), violations=n_bad,
+                                    too_far=sum(bool(w.get("too_small")) for w in workers)))
 
-    n = len(timeline)
+    n = regular
     return RunSummary(
         frames_analysed=n,
+        arrival_checks=len(timeline) - n,
         peak_workers=peak,
-        avg_workers=round((worker_checks + too_small) / n, 2) if n else 0.0,
+        avg_workers=round(sum(p.workers for p in points) / n, 2) if n else 0.0,
         worker_checks=worker_checks,
         ok_checks=worker_checks - violation_checks,
         violation_checks=violation_checks,

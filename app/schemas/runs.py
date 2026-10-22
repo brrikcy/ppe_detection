@@ -65,9 +65,12 @@ class TypeCount(BaseModel):
 
 
 class TimelinePoint(BaseModel):
+    """One regular check. workers = on screen; ok = workers - violations - too_far."""
+
     time_sec: float
     workers: int
     violations: int
+    too_far: int = 0  # on screen but too small to check
 
 
 class ViolationEvent(BaseModel):
@@ -96,7 +99,8 @@ class PersonSummary(BaseModel):
 
 
 class RunSummary(BaseModel):
-    frames_analysed: int
+    frames_analysed: int  # regular checks (arrival checks not included)
+    arrival_checks: int = 0  # extra checks of workers who appeared between regular checks
     peak_workers: int
     avg_workers: float
     worker_checks: int  # sum over checked frames of workers checked (too-far-away ones excluded)

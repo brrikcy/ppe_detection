@@ -20,12 +20,12 @@ It comes as a web app with a results dashboard (`run.py`) and a command-line too
 2. **Every check interval (default 1s): check PPE** (`ppe/analyzer.py`). Every tracked worker is cropped, and Moondream `query` is asked a yes/no question for each required PPE item. These calls run in parallel.
    - A "no" answer is double-checked with `detect` on the crop. If the item is found on this worker (e.g. a `hard hat` near the top of their box, not on a neighbour who overlaps the crop), it counts as present.
    - If the body part it belongs on (e.g. the `head`) can't be found on this worker, because they are cut off or blocked from view, the item is recorded as `unverified` in the JSON report and isn't counted as a violation.
-   - A worker who appears between checks is checked straight away, unless the next check is less than half an interval away.
+   - A worker who appears between checks is checked straight away, unless the next check is less than half an interval away. This arrival check is recorded in the report too, so someone who leaves before the next regular check still has a status.
    - Workers shorter than 8% of the frame height are drawn grey ("Too far") and left out of the figures, with no API calls spent on them.
    - If a check fails after retries, that frame is skipped rather than recorded with old results. A rejected API key stops the run at once.
 3. **Status shown in the video** (`ppe/status.py`): an item is shown as missing when it was missing in most of the worker's last 3 checks. On a tie the previous state holds, so one misread doesn't flip the box.
 4. Boxes and tags are drawn on every frame; tags are moved so they don't cover each other or the counts bar.
-5. Frames are piped straight into ffmpeg (H.264, with the original audio), so the video is compressed once. It uses the system `ffmpeg` or the copy bundled with `imageio-ffmpeg`. A JSON report is written next to it.
+5. Frames are piped straight into ffmpeg (H.264, with the original audio), so the video is compressed once. It uses the system `ffmpeg` or the copy bundled with `imageio-ffmpeg`. A JSON report is written next to it (see [Report](#report)).
 
 ## Setup
 
@@ -67,9 +67,9 @@ python run.py --port 8080 --no-browser
 3. While the run is processing, you see live progress, the latest checked frame and the timeline so far. You can leave the page; the run keeps going.
 4. When it finishes, the dashboard shows:
    - **Summary figures**: compliance, violations, share of time with a violation, and people tracked.
-   - **The annotated video**, with Video and Report download buttons.
+   - **The annotated video**, with Video and Report download buttons. Below it: how many regular checks and arrival checks were made.
    - **Violations by type**, and items it couldn't verify. A low-coverage warning appears when an item could only be seen in a minority of checks, with a count of workers too far away to check.
-   - **Compliance over time**: a chart of workers per check; click a column to jump the video there.
+   - **Compliance over time**: a chart of workers on screen at each regular check, split into PPE OK, PPE violation and too far to check. Click a column to jump the video there.
    - **People**: one card per tracked worker with their ID, photo, overall status, time on screen and how often each item was missing. Click a card to see that person's images.
      - **Flagged**: an item was missing in more than half of their checks.
      - **Occasional**: violations in fewer than half of their checks.
@@ -91,6 +91,20 @@ snapshots/       crop of each flagged worker per check
 frames/          full annotated frame for each check with a violation
 people/          best view of each tracked worker, <id>.jpg
 ```
+
+### Report
+
+`annotated.json` holds the run's settings and a `timeline` with one entry per check:
+
+```json
+{"frame": 30, "time_sec": 1.0, "arrival": false,
+ "workers": [{"track_id": 3, "box": [412, 180, 590, 760], "label": "PPE Violation (1) - No Helmet",
+              "violations": ["No Helmet"], "unverified": [], "too_small": false}]}
+```
+
+- **Regular checks** (`"arrival": false`) list everyone on screen. Workers too far away to check have `"too_small": true` and no verdict.
+- **Arrival checks** (`"arrival": true`) list only the workers who appeared since the last regular check.
+- `frames_analysed` counts regular checks; `arrival_checks` counts the others. Both kinds count towards the compliance figures, the People section and the violation cards. Only regular checks are used for the timeline chart and the per-frame figures (time with a violation, workers on screen).
 
 ### API
 
@@ -119,7 +133,7 @@ app/
   services/
     run_store.py        filesystem persistence of runs (meta.json never holds the key)
     runner.py           background execution, progress, preview, snapshots and person photos
-    summary.py          dashboard metrics and per-person status from the per-check timeline
+    summary.py          dashboard metrics and per-person status from the report's timeline
     keys.py             form key -> server key fallback, key check
     media.py            converts older runs' videos for browser playback
   api/deps.py           dependency providers
@@ -157,8 +171,6 @@ Supported PPE items: `helmet`, `vest`, `gloves`, `boots`, `goggles`, `mask` (def
 - With a camera moving through a group, people at the frame edges are detected on and off, which starts new IDs.
 - Tracking assumes a continuous shot. A scene cut, or two workers crossing while they look alike, can start a new ID or swap two IDs.
 - Moondream's free tier rate-limits (HTTP 429). Requests are retried with backoff, and lowering `MAX_WORKERS` reduces how often this happens.
-- The compliance-over-time chart counts workers too far away to check as PPE OK.
-- A worker checked on arrival between two regular checks updates the video, but that check isn't in the report. Someone who leaves before the next regular check is missing from the People section.
 
 ## Tests
 

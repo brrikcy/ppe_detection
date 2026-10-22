@@ -201,6 +201,7 @@ img, video { max-width: 100%; display: block; }
 .chart .axis text { fill: var(--muted); font: 11px var(--mono); }
 .chart .bar-ok { fill: var(--good); }
 .chart .bar-bad { fill: var(--critical); }
+.chart .bar-far { fill: var(--muted); }
 .chart .hit { fill: transparent; cursor: pointer; }
 .chart .hit:hover { fill: color-mix(in srgb, var(--fg) 6%, transparent); }
 .chart .playhead { stroke: var(--fg); stroke-width: 1.5; stroke-dasharray: 3 3; }

@@ -160,7 +160,9 @@ function timelineCard(s, m, video) {
         h("p", {}, video ? "Workers per checked frame. Click a column to jump the video there." : "Workers per checked frame so far.")),
       h("div", { class: "legend" },
         h("span", {}, h("i", { style: "background:var(--good)" }), "PPE OK"),
-        h("span", {}, h("i", { style: "background:var(--critical)" }), "PPE violation"))),
+        h("span", {}, h("i", { style: "background:var(--critical)" }), "PPE violation"),
+        s.timeline.some((p) => p.too_far)
+          ? h("span", {}, h("i", { style: "background:var(--muted)" }), "Too far to check") : null)),
     box);
   const chart = timelineChart(box, s.timeline, {
     duration: m.options.max_seconds ? Math.min(m.options.max_seconds, m.video.duration_sec) : m.video.duration_sec,
@@ -373,7 +375,8 @@ function renderDashboard(root, run, { onDeleted }) {
         playerMsg,
         h("div", { class: "player-foot" },
           h("span", {}, "Annotated output"),
-          h("span", { class: "num" }, `${s.frames_analysed} frames checked`))),
+          h("span", { class: "num" }, `${s.frames_analysed} frames checked` +
+            (s.arrival_checks ? ` · ${plural(s.arrival_checks, "arrival check")}` : "")))),
       byTypeCard(s)),
     peopleCard(run, s, video),
     timelineCard(s, m, video),

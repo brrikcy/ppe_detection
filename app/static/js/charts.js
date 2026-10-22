@@ -40,7 +40,7 @@ export function timelineChart(container, points, { duration, interval, onSeek })
   const bw = Math.max(2, Math.min(28, slot - 2)); // 2px surface gap between columns
 
   const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart", role: "img",
-    "aria-label": "Workers per checked frame: in compliance versus with violations" });
+    "aria-label": "Workers per checked frame: in compliance, with violations, and too far to check" });
 
   const grid = s("g", { class: "grid" });
   const axis = s("g", { class: "axis" });
@@ -63,24 +63,26 @@ export function timelineChart(container, points, { duration, interval, onSeek })
   for (const p of points) {
     const cx = x(p.time_sec + interval / 2);
     const x0 = cx - bw / 2;
-    const ok = p.workers - p.violations;
-    if (ok > 0) {
-      const top = p.violations > 0 ? 0 : 3;
-      const yTop = y(ok);
-      bars.append(top
-        ? s("path", { d: topRoundedRect(x0, yTop, bw, y(0) - yTop, top), class: "bar-ok" })
-        : s("rect", { x: x0, y: yTop, width: bw, height: y(0) - yTop, class: "bar-ok" }));
-    }
-    if (p.violations > 0) {
-      const yTop = y(p.workers);
-      const yBot = y(ok) - (ok > 0 ? 2 : 0); // 2px gap between stacked segments
-      bars.append(s("path", { d: topRoundedRect(x0, yTop, bw, Math.max(1, yBot - yTop), 3), class: "bar-bad" }));
-    }
+    const tooFar = p.too_far ?? 0; // older runs don't have it
+    const ok = p.workers - p.violations - tooFar;
+    // Bottom to top; only the top segment gets rounded corners, with a 2px gap between segments.
+    const segments = [[ok, "bar-ok"], [p.violations, "bar-bad"], [tooFar, "bar-far"]].filter(([n]) => n > 0);
+    let base = 0;
+    segments.forEach(([n, cls], i) => {
+      const yTop = y(base + n);
+      const yBot = y(base) - (i > 0 ? 2 : 0);
+      const height = Math.max(1, yBot - yTop);
+      bars.append(i === segments.length - 1
+        ? s("path", { d: topRoundedRect(x0, yTop, bw, height, 3), class: cls })
+        : s("rect", { x: x0, y: yTop, width: bw, height, class: cls }));
+      base += n;
+    });
     // Hit target wider and taller than the mark.
     const hit = s("rect", { x: cx - Math.max(slot, 10) / 2, y: m.t, width: Math.max(slot, 10), height: ih, class: "hit" });
     hit.addEventListener("mousemove", (e) => showTooltip(e,
       `<b>${fmt.timePrecise(p.time_sec)}</b><br>${p.workers} worker${p.workers === 1 ? "" : "s"} seen<br>` +
-      `${ok} in compliance · ${p.violations} with violations` + (onSeek ? `<br><span style="opacity:.7">Click to jump here</span>` : "")));
+      `${ok} in compliance · ${p.violations} with violations` +
+      (tooFar ? `<br>${tooFar} too far to check` : "") + (onSeek ? `<br><span style="opacity:.7">Click to jump here</span>` : "")));
     hit.addEventListener("mouseleave", hideTooltip);
     if (onSeek) hit.addEventListener("click", () => onSeek(p.time_sec));
     bars.append(hit);

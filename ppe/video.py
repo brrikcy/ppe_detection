@@ -109,12 +109,20 @@ def process_video(
                         results[p.id] = r
                         statuses[p.id].add(r, idx)
 
-            if is_check and not failed:
-                current = [results.get(p.id) or WorkerResult(box=p.box, track_id=p.id, too_small=True)
-                           for p in tracked]
+            arrival = bool(due) and not is_check
+            if (is_check or arrival) and not failed:
+                if is_check:
+                    # Regular check: everyone on screen, with too-far workers marked as such.
+                    current = [results.get(p.id) or WorkerResult(box=p.box, track_id=p.id, too_small=True)
+                               for p in tracked]
+                else:
+                    # Arrival check: only the newcomers, so they're in the report even if they
+                    # leave before the next regular check.
+                    current = [results[p.id] for p in due]
                 entry = {
                     "frame": idx,
                     "time_sec": round(idx / fps, 2),
+                    "arrival": arrival,
                     "workers": [{"track_id": r.track_id, "box": list(r.box), "label": r.label,
                                  "violations": r.violations, "unverified": r.unverified,
                                  "too_small": r.too_small}
@@ -123,8 +131,8 @@ def process_video(
                 timeline.append(entry)
                 if on_analysed:
                     on_analysed(entry, frame, current)
-                log.info("frame %d (%.1fs): %d workers, %d with violations",
-                         idx, idx / fps, len(current), sum(not r.ok for r in current))
+                log.info("frame %d (%.1fs)%s: %d workers, %d with violations", idx, idx / fps,
+                         " arrival" if arrival else "", len(current), sum(bool(r.violations) for r in current))
 
             display = [statuses[p.id].display(p.id, p.box, too_small=p.box[3] - p.box[1] < min_check_h)
                        for p in tracked]
@@ -150,7 +158,8 @@ def process_video(
         "duration_sec": round(idx / fps, 2),
         "analysis_interval_sec": cfg.analysis_interval_sec,
         "frames_written": idx,
-        "frames_analysed": len(timeline),
+        "frames_analysed": sum(not e["arrival"] for e in timeline),  # regular checks
+        "arrival_checks": sum(e["arrival"] for e in timeline),
         "required_ppe": cfg.required_ppe,
         "timeline": timeline,
     }

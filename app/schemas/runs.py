@@ -75,7 +75,8 @@ class ViolationEvent(BaseModel):
     frame: int
     violations: list[str]
     box: list[int]
-    snapshot: str | None  # file name under /snapshots/
+    snapshot: str | None  # crop of the worker, file name under /snapshots/
+    frame_image: str | None = None  # whole annotated frame, file name under /frames/
 
 
 class RunSummary(BaseModel):

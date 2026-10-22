@@ -13,7 +13,13 @@ def snapshot_name(frame: int, worker_index: int) -> str:
     return f"{frame:06d}_{worker_index}.jpg"
 
 
-def build_summary(timeline: list[dict], available_snapshots: set[str] | None = None) -> RunSummary:
+def frame_name(frame: int) -> str:
+    return f"{frame:06d}.jpg"
+
+
+def build_summary(timeline: list[dict], available_snapshots: set[str] | None = None,
+                  available_frames: set[str] | None = None) -> RunSummary:
+    """available_* limit image references to files that exist (None = assume all exist)."""
     by_type: Counter[str] = Counter()
     unverified: Counter[str] = Counter()
     points, events = [], []
@@ -36,6 +42,8 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
                 violations=w["violations"],
                 box=list(w["box"]),
                 snapshot=snap if available_snapshots is None or snap in available_snapshots else None,
+                frame_image=(frame_name(entry["frame"])
+                             if available_frames is None or frame_name(entry["frame"]) in available_frames else None),
             ))
         worker_checks += len(workers)
         violation_checks += n_bad

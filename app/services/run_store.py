@@ -8,6 +8,7 @@ Layout:
         annotated.json   full per-frame report from ppe.video
         preview.jpg      latest analysed frame, annotated (updated while running)
         snapshots/       crops of workers with violations
+        frames/          full annotated frames that contain a violation
 """
 
 from __future__ import annotations
@@ -64,6 +65,10 @@ class RunPaths:
     def snapshots(self) -> Path:
         return self.root / "snapshots"
 
+    @property
+    def frames(self) -> Path:
+        return self.root / "frames"
+
     def input(self) -> Path | None:
         return next(iter(sorted(self.root.glob("input.*"))), None)
 
@@ -89,6 +94,7 @@ class RunStore:
         p = self.paths(run_id)
         p.root.mkdir(parents=True)
         p.snapshots.mkdir()
+        p.frames.mkdir()
         return p
 
     def save(self, meta: RunMeta) -> None:

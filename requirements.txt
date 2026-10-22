@@ -3,6 +3,7 @@ opencv-python-headless>=4.8
 numpy>=1.24
 pillow>=10.0
 python-dotenv>=1.0
+imageio-ffmpeg>=0.5  # bundled ffmpeg for H.264 output when none is installed
 # Web app
 fastapi>=0.115
 uvicorn[standard]>=0.30

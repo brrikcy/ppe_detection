@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Callable
@@ -15,6 +14,7 @@ from PIL import Image
 
 from .analyzer import PPEAnalyzer, WorkerResult
 from .annotate import draw_results
+from .media import encode_for_browser
 from .moondream_client import AuthError
 
 log = logging.getLogger(__name__)
@@ -120,19 +120,6 @@ def process_video(
 
 
 def _finalize(raw_path: Path, source: Path, output: Path, max_seconds: float | None):
-    """Re-encode to browser-friendly H.264 and carry over the source audio if ffmpeg exists."""
-    if not shutil.which("ffmpeg"):
-        log.warning("ffmpeg not found; writing mp4v output (may not play in browsers)")
-        shutil.move(raw_path, output)
-        return
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(raw_path), "-i", str(source),
-           "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-           "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-shortest"]
-    if max_seconds:
-        cmd += ["-t", str(max_seconds)]
-    cmd.append(str(output))
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError:
-        log.warning("ffmpeg re-encode failed; writing mp4v output instead")
+    """Re-encode to browser-friendly H.264 with the source audio; keep mp4v if that's impossible."""
+    if not encode_for_browser(raw_path, output, audio_source=source, max_seconds=max_seconds):
         shutil.move(raw_path, output)

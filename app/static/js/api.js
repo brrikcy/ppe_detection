@@ -60,5 +60,6 @@ export const api = {
     report: (id) => `/api/runs/${encodeURIComponent(id)}/report`,
     preview: (id) => `/api/runs/${encodeURIComponent(id)}/preview?t=${Date.now()}`,
     snapshot: (id, name) => `/api/runs/${encodeURIComponent(id)}/snapshots/${encodeURIComponent(name)}`,
+    frame: (id, name) => `/api/runs/${encodeURIComponent(id)}/frames/${encodeURIComponent(name)}`,
   },
 };

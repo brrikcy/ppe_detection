@@ -6,6 +6,7 @@ from fastapi import Request
 
 from ..core.settings import Settings
 from ..services.keys import KeyVerifier
+from ..services.media import VideoConverter
 from ..services.run_store import RunStore
 from ..services.runner import RunRunner
 
@@ -24,3 +25,7 @@ def get_runner(request: Request) -> RunRunner:
 
 def get_key_verifier(request: Request) -> KeyVerifier:
     return request.app.state.verify_key
+
+
+def get_video_converter(request: Request) -> VideoConverter:
+    return request.app.state.video_converter

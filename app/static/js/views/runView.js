@@ -2,6 +2,7 @@
 
 import { api, ServerUnreachable } from "../api.js";
 import { timelineChart } from "../charts.js";
+import { openLightbox } from "../lightbox.js";
 import { fmt, h, icons, plural, statusPill } from "../ui.js";
 
 const POLL_MS = 1000;
@@ -224,9 +225,19 @@ function eventsCard(run, s, video) {
       type: "button", "aria-pressed": String(filter === t),
       onclick: () => { filter = t; shown = EVENTS_PAGE; draw(); },
     }, t ?? `All (${s.events.length})`)));
-    grid.replaceChildren(...list.slice(0, shown).map((e) => h("button", {
-      class: "event", type: "button", title: "Jump to this moment",
-      onclick: () => { video.currentTime = e.time_sec + 0.05; video.scrollIntoView({ behavior: "smooth", block: "center" }); video.play().catch(() => {}); },
+    const items = list.map((e) => ({
+      ...e,
+      cropUrl: e.snapshot ? api.urls.snapshot(run.meta.id, e.snapshot) : null,
+      frameUrl: e.frame_image ? api.urls.frame(run.meta.id, e.frame_image) : null,
+    }));
+    const showInVideo = (e) => {
+      video.currentTime = e.time_sec + 0.05;
+      video.scrollIntoView({ behavior: "smooth", block: "center" });
+      video.play().catch(() => {});
+    };
+    grid.replaceChildren(...list.slice(0, shown).map((e, i) => h("button", {
+      class: "event", type: "button", title: "Open image",
+      onclick: () => openLightbox(items, i, { onShowInVideo: showInVideo }),
     },
       h("div", { class: "thumb" }, e.snapshot
         ? h("img", { src: api.urls.snapshot(run.meta.id, e.snapshot), alt: `Worker at ${fmt.timePrecise(e.time_sec)}`, loading: "lazy" })
@@ -247,7 +258,7 @@ function eventsCard(run, s, video) {
   draw();
   return h("section", { class: "card card-pad" },
     h("div", { class: "card-head" },
-      h("div", {}, h("h2", {}, "Violations"), h("p", {}, "One card per flagged worker per checked frame. Click to jump the video.")),
+      h("div", {}, h("h2", {}, "Violations"), h("p", {}, "One card per flagged worker per checked frame. Click to open; use ← → to browse.")),
       filters),
     grid, more);
 }

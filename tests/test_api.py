@@ -82,6 +82,8 @@ def test_full_run_lifecycle(client, tmp_path):
     assert {t["label"]: t["count"] for t in s["by_type"]} == {"No Helmet": 3, "No Vest": 3}
     snap = s["events"][0]["snapshot"]
     assert snap and client.get(f"/api/runs/{run_id}/snapshots/{snap}").status_code == 200
+    full = s["events"][0]["frame_image"]
+    assert full and client.get(f"/api/runs/{run_id}/frames/{full}").status_code == 200
 
     assert client.get(f"/api/runs/{run_id}/video").headers["content-type"] == "video/mp4"
     assert client.get(f"/api/runs/{run_id}/report").json()["frames_analysed"] == 3
@@ -141,3 +143,15 @@ def test_missing_key_everywhere(tmp_path):
 
 def test_path_traversal_is_rejected(client):
     assert client.get("/api/runs/..%2F..%2Fetc").status_code == 404
+
+
+def test_mp4v_video_is_converted_for_browsers(tmp_path):
+    from app.services.media import VideoConverter
+    from ppe.media import find_ffmpeg, is_browser_playable, video_fourcc
+
+    if not find_ffmpeg():
+        pytest.skip("no ffmpeg available")
+    path = _video(tmp_path / "annotated.mp4")
+    assert not is_browser_playable(path)  # OpenCV reports mp4v as FMP4
+    assert VideoConverter().ensure_playable(path)
+    assert video_fourcc(path) in {"avc1", "h264"}

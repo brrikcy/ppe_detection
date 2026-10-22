@@ -23,7 +23,7 @@ from ppe.video import process_video
 
 from ..schemas.runs import Progress, RunStatus
 from .run_store import RunStore, replace_with_retry
-from .summary import snapshot_name
+from .summary import frame_name, snapshot_name
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +90,8 @@ class RunRunner:
             progress.frames_analysed += 1
             try:
                 self._save_snapshots(paths.snapshots, entry["frame"], frame, results)
-                self._save_preview(paths.preview, frame, results)
+                self._save_preview(paths.preview, frame, results,
+                                   violation_copy=paths.frames / frame_name(entry["frame"]))
             except OSError:
                 # e.g. Windows refuses to replace preview.jpg while the browser is fetching it.
                 log.warning("Couldn't save preview/snapshots for frame %d", entry["frame"], exc_info=True)
@@ -119,13 +120,17 @@ class RunRunner:
                           finished_at=datetime.now(timezone.utc))
 
     @staticmethod
-    def _save_preview(path, frame, results) -> None:
+    def _save_preview(path, frame, results, violation_copy=None) -> None:
+        """Latest annotated frame for the live view; also kept under frames/ if it has a violation."""
         img = draw_results(frame.copy(), results)
         h, w = img.shape[:2]
         if w > PREVIEW_MAX_WIDTH:
             img = cv2.resize(img, (PREVIEW_MAX_WIDTH, int(h * PREVIEW_MAX_WIDTH / w)))
         tmp = path.with_name("preview.tmp.jpg")
         cv2.imwrite(str(tmp), img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if violation_copy is not None and any(not r.ok for r in results):
+            violation_copy.parent.mkdir(exist_ok=True)
+            cv2.imwrite(str(violation_copy), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
         replace_with_retry(tmp, path)
 
     @staticmethod

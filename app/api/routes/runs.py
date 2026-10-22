@@ -21,10 +21,11 @@ from ...schemas.runs import (
 from ...services.keys import (
     KeyRejected, KeyVerifier, MissingKey, MoondreamUnreachable, resolve_key,
 )
-from ...services.run_store import RunNotFound, RunPaths, RunStore
+from ...services.run_store import RunNotFound, RunStore
 from ...services.runner import RunRunner
 from ...services.summary import build_summary
-from ..deps import get_key_verifier, get_runner, get_settings, get_store
+from ...services.media import VideoConverter
+from ..deps import get_key_verifier, get_runner, get_settings, get_store, get_video_converter
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -76,8 +77,8 @@ def _progress_fraction(meta: RunMeta) -> float:
     return round(meta.progress.fraction, 4)
 
 
-def _snapshot_names(paths: RunPaths) -> set[str]:
-    return {p.name for p in paths.snapshots.glob("*.jpg")} if paths.snapshots.exists() else set()
+def _image_names(folder: Path) -> set[str]:
+    return {p.name for p in folder.glob("*.jpg")} if folder.exists() else set()
 
 
 @router.post("", response_model=RunDetail, status_code=status.HTTP_201_CREATED)
@@ -144,7 +145,7 @@ def list_runs(store: Store) -> list[RunListItem]:
         item = RunListItem(id=meta.id, name=meta.name, created_at=meta.created_at,
                            status=meta.status, progress_fraction=_progress_fraction(meta))
         if meta.status == RunStatus.completed and (report := store.read_report(meta.id)):
-            s = build_summary(report["timeline"], available_snapshots=set())
+            s = build_summary(report["timeline"], available_snapshots=set(), available_frames=set())
             item.violation_checks, item.worker_checks = s.violation_checks, s.worker_checks
         items.append(item)
     return items
@@ -160,7 +161,8 @@ def get_run(run_id: str, store: Store, runner: Runner) -> RunDetail:
         timeline = report["timeline"] if report else None
     elif meta.status == RunStatus.running:
         timeline = runner.live_timeline(run_id)
-    summary = build_summary(timeline, _snapshot_names(paths)) if timeline is not None else None
+    summary = (build_summary(timeline, _image_names(paths.snapshots), _image_names(paths.frames))
+               if timeline is not None else None)
     return RunDetail(meta=meta, progress_fraction=_progress_fraction(meta), summary=summary)
 
 
@@ -180,10 +182,15 @@ def _file(path: Path | None, media_type: str, filename: str | None = None) -> Fi
 
 
 @router.get("/{run_id}/video")
-def get_video(run_id: str, store: Store, download: bool = False) -> FileResponse:
+def get_video(run_id: str, store: Store,
+              converter: Annotated[VideoConverter, Depends(get_video_converter)],
+              download: bool = False) -> FileResponse:
     meta = _get_meta(store, run_id)
-    return _file(store.paths(run_id).output, "video/mp4",
-                 f"{meta.name}_annotated.mp4" if download else None)
+    paths = store.paths(run_id)
+    if meta.status == RunStatus.completed:
+        # Older runs made without ffmpeg are mp4v; convert once so browsers can play them.
+        converter.ensure_playable(paths.output, audio_source=paths.input(), max_seconds=meta.options.max_seconds)
+    return _file(paths.output, "video/mp4", f"{meta.name}_annotated.mp4" if download else None)
 
 
 @router.get("/{run_id}/report")
@@ -198,9 +205,18 @@ def get_preview(run_id: str, store: Store) -> FileResponse:
     return _file(store.paths(run_id).preview, "image/jpeg")
 
 
-@router.get("/{run_id}/snapshots/{name}")
-def get_snapshot(run_id: str, name: str, store: Store) -> FileResponse:
+def _image(store: RunStore, run_id: str, folder: str, name: str) -> FileResponse:
     _get_meta(store, run_id)
     if Path(name).name != name or not name.endswith(".jpg"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "File not available")
-    return _file(store.paths(run_id).snapshots / name, "image/jpeg")
+    return _file(getattr(store.paths(run_id), folder) / name, "image/jpeg")
+
+
+@router.get("/{run_id}/snapshots/{name}")
+def get_snapshot(run_id: str, name: str, store: Store) -> FileResponse:
+    return _image(store, run_id, "snapshots", name)
+
+
+@router.get("/{run_id}/frames/{name}")
+def get_frame(run_id: str, name: str, store: Store) -> FileResponse:
+    return _image(store, run_id, "frames", name)

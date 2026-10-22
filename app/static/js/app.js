@@ -1,6 +1,6 @@
 // Entry point: hash router (#new, #run/<id>) and the runs sidebar.
 
-import { api } from "./api.js";
+import { api, ServerUnreachable } from "./api.js";
 import { fmt, h, plural, statusPill } from "./ui.js";
 import { renderNewRun } from "./views/newRun.js";
 import { renderRun } from "./views/runView.js";
@@ -65,7 +65,12 @@ async function route() {
       });
     }
   } catch (e) {
-    view.replaceChildren(h("div", { class: "page" }, h("div", { class: "alert" }, h("h3", {}, "Something went wrong"), h("p", {}, e.message))));
+    const offline = e instanceof ServerUnreachable;
+    view.replaceChildren(h("div", { class: "page" },
+      h("div", { class: "alert", role: "alert" },
+        h("h3", {}, offline ? "Server not reachable" : "Something went wrong"),
+        h("p", {}, e.message)),
+      h("div", {}, h("button", { class: "btn btn-primary", type: "button", onclick: route }, "Retry"))));
   }
   refreshSidebar();
 }

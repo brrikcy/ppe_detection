@@ -16,13 +16,15 @@ from ppe.config import parse_required
 
 from ...core.settings import Settings
 from ...schemas.runs import (
-    RunDetail, RunListItem, RunMeta, RunOptions, RunStatus, VideoInfo,
+    KeySource, RunDetail, RunListItem, RunMeta, RunOptions, RunStatus, VideoInfo,
 )
-from ...services.keys import MissingKey, resolve_key
+from ...services.keys import (
+    KeyRejected, KeyVerifier, MissingKey, MoondreamUnreachable, resolve_key,
+)
 from ...services.run_store import RunNotFound, RunPaths, RunStore
 from ...services.runner import RunRunner
 from ...services.summary import build_summary
-from ..deps import get_runner, get_settings, get_store
+from ..deps import get_key_verifier, get_runner, get_settings, get_store
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -83,6 +85,7 @@ async def create_run(
     store: Store,
     runner: Runner,
     settings: Annotated[Settings, Depends(get_settings)],
+    verify: Annotated[KeyVerifier, Depends(get_key_verifier)],
     video: Annotated[UploadFile, File(description="Construction-site video")],
     api_key: Annotated[str | None, Form()] = None,
     required_ppe: Annotated[str, Form(description="Comma separated, e.g. helmet,vest")] = "helmet,vest",
@@ -96,6 +99,15 @@ async def create_run(
                              max_seconds=max_seconds or None)
     except (MissingKey, ValueError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+
+    # Check the key before accepting the upload, so a wrong key never becomes a failed run.
+    try:
+        await run_in_threadpool(verify, key)
+    except KeyRejected as exc:
+        hint = " It came from the server's .env." if key_source == KeySource.server else ""
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"{exc}{hint} Fix the key and try again.")
+    except MoondreamUnreachable as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
 
     suffix = Path(video.filename or "").suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:

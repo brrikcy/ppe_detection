@@ -168,7 +168,7 @@ export async function renderNewRun(root, { onCreated }) {
     if (Number(maxSec.value) > 0) body.append("max_seconds", String(Number(maxSec.value)));
 
     runBtn.disabled = true;
-    runBtn.textContent = "Uploading…";
+    runBtn.textContent = "Uploading and checking key…";
     uploadBar.hidden = false;
     const fill = uploadBar.querySelector("i");
     try {

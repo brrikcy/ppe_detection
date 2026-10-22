@@ -90,16 +90,15 @@ def process_video(
             idx += 1
             if on_progress and (idx % 10 == 0 or idx == total):
                 on_progress(idx, total)
+        cap.release()
+        writer.release()
+        if timeline and failures == len(timeline):
+            raise RuntimeError("Moondream analysis failed on every checked frame; see the server log")
+        _finalize(raw_path, input_path, output_path, max_seconds)
     finally:
         cap.release()
         writer.release()
-
-    if timeline and failures == len(timeline):
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise RuntimeError("Moondream analysis failed on every checked frame; see the server log")
-
-    _finalize(raw_path, input_path, output_path, max_seconds)
-    shutil.rmtree(tmp_dir, ignore_errors=True)
 
     report = {
         "input": str(input_path),

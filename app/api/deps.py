@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import Request
 
 from ..core.settings import Settings
+from ..services.keys import KeyVerifier
 from ..services.run_store import RunStore
 from ..services.runner import RunRunner
 
@@ -19,3 +20,7 @@ def get_store(request: Request) -> RunStore:
 
 def get_runner(request: Request) -> RunRunner:
     return request.app.state.runner
+
+
+def get_key_verifier(request: Request) -> KeyVerifier:
+    return request.app.state.verify_key

@@ -1,6 +1,6 @@
 // Run view: live progress while processing, results dashboard when done.
 
-import { api } from "../api.js";
+import { api, ServerUnreachable } from "../api.js";
 import { timelineChart } from "../charts.js";
 import { fmt, h, icons, plural, statusPill } from "../ui.js";
 
@@ -18,6 +18,13 @@ export async function renderRun(root, runId, { onChanged, onDeleted }) {
     try {
       run = await api.getRun(runId);
     } catch (e) {
+      if (e instanceof ServerUnreachable) {
+        // Keep polling: the server may be restarting.
+        root.replaceChildren(h("div", { class: "page" }, h("div", { class: "alert", role: "alert" },
+          h("h3", {}, "Server not reachable"), h("p", {}, e.message), h("p", { class: "hint" }, "Retrying every few seconds…"))));
+        timer = setTimeout(tick, 3000);
+        return;
+      }
       root.replaceChildren(notFound(e.message));
       return;
     }

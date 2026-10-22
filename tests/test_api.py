@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.core.settings import Settings
 from app.main import create_app
+from app.services.keys import KeyRejected
 from ppe.analyzer import PPEAnalyzer
 
 from .test_pipeline import FakeModel
@@ -33,7 +34,11 @@ def client(tmp_path):
         seen_keys.append(config.api_key)
         return PPEAnalyzer(config, model=FakeModel())
 
-    app = create_app(settings, analyzer_factory=factory)
+    def verify(key):
+        if key == "bad-key":
+            raise KeyRejected("Moondream rejected this API key.")
+
+    app = create_app(settings, analyzer_factory=factory, key_verifier=verify)
     with TestClient(app) as c:
         c.seen_keys = seen_keys
         yield c
@@ -96,6 +101,18 @@ def test_form_key_takes_precedence_and_is_not_stored(client, tmp_path):
     assert client.seen_keys == ["form-key"]
     meta_file = tmp_path / "runs" / run_id / "meta.json"
     assert "form-key" not in meta_file.read_text()
+
+
+def test_wrong_key_is_refused_before_a_run_is_created(client, tmp_path):
+    r = _upload(client, tmp_path, api_key="bad-key")
+    assert r.status_code == 401
+    assert "rejected" in r.json()["detail"]
+    assert client.get("/api/runs").json() == []
+    assert client.seen_keys == []  # nothing was processed
+
+    check = client.post("/api/key/check", data={"api_key": "bad-key"}).json()
+    assert check == {"ok": False, "source": "form", "message": "Moondream rejected this API key."}
+    assert client.post("/api/key/check").json()["ok"] is True  # server key
 
 
 def test_rejects_bad_input(client, tmp_path):

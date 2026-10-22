@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,6 +26,18 @@ from ..schemas.runs import RunMeta, RunStatus
 
 class RunNotFound(KeyError):
     pass
+
+
+def replace_with_retry(src: Path, dst: Path, attempts: int = 10) -> None:
+    """os.replace, retried: on Windows it fails while another handle has dst open."""
+    for i in range(attempts):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.05)
 
 
 @dataclass(frozen=True)
@@ -83,7 +96,7 @@ class RunStore:
         tmp = p.meta.with_suffix(".tmp")
         with self._lock:
             tmp.write_text(meta.model_dump_json(indent=2))
-            tmp.replace(p.meta)
+            replace_with_retry(tmp, p.meta)
 
     def get(self, run_id: str) -> RunMeta:
         p = self.paths(run_id)

@@ -11,8 +11,10 @@ from ppe.config import PPE_CATALOG
 
 from ...core.settings import Settings
 from ...schemas.runs import AppConfig, KeyCheckResult, RunOptions
-from ...services.keys import MissingKey, check_key, resolve_key
-from ..deps import get_settings
+from ...services.keys import (
+    KeyRejected, KeyVerifier, MissingKey, MoondreamUnreachable, resolve_key,
+)
+from ..deps import get_key_verifier, get_settings
 
 router = APIRouter(prefix="/api", tags=["config"])
 
@@ -35,11 +37,14 @@ def get_config(settings: Annotated[Settings, Depends(get_settings)]) -> AppConfi
 @router.post("/key/check", response_model=KeyCheckResult)
 async def post_key_check(
     settings: Annotated[Settings, Depends(get_settings)],
+    verify: Annotated[KeyVerifier, Depends(get_key_verifier)],
     api_key: Annotated[str | None, Form()] = None,
 ) -> KeyCheckResult:
     try:
         key, source = resolve_key(api_key, settings)
+        await run_in_threadpool(verify, key)
     except MissingKey as exc:
         return KeyCheckResult(ok=False, source=None, message=str(exc))
-    ok, message = await run_in_threadpool(check_key, key)
-    return KeyCheckResult(ok=ok, source=source, message=message)
+    except (KeyRejected, MoondreamUnreachable) as exc:
+        return KeyCheckResult(ok=False, source=source, message=str(exc))
+    return KeyCheckResult(ok=True, source=source, message="Key works.")

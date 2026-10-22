@@ -1,7 +1,20 @@
 // Thin client for the FastAPI backend.
 
+export class ServerUnreachable extends Error {
+  constructor() {
+    super(`Can't reach the PPE Inspector server at ${location.host}. Check that "python run.py" is still running in its terminal (and look there for errors), then retry.`);
+    this.name = "ServerUnreachable";
+  }
+}
+
 async function request(path, options = {}) {
-  const res = await fetch(path, options);
+  let res;
+  try {
+    res = await fetch(path, options);
+  } catch {
+    // fetch only rejects when no HTTP response arrived at all.
+    throw new ServerUnreachable();
+  }
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try {
@@ -37,7 +50,7 @@ export const api = {
         const detail = xhr.response?.detail;
         reject(new Error(typeof detail === "string" ? detail : `Upload failed (${xhr.status})`));
       };
-      xhr.onerror = () => reject(new Error("Network error while uploading"));
+      xhr.onerror = () => reject(new ServerUnreachable());
       xhr.send(form);
     });
   },

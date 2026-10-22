@@ -1,6 +1,11 @@
-"""API key resolution: the key typed in the form wins, the server's .env is the fallback."""
+"""API key resolution and verification.
+
+The key typed in the form wins; the server's .env is the fallback.
+"""
 
 from __future__ import annotations
+
+from typing import Callable
 
 from PIL import Image
 
@@ -14,6 +19,17 @@ class MissingKey(ValueError):
     pass
 
 
+class KeyRejected(Exception):
+    pass
+
+
+class MoondreamUnreachable(Exception):
+    pass
+
+
+KeyVerifier = Callable[[str], None]
+
+
 def resolve_key(form_key: str | None, settings: Settings) -> tuple[str, KeySource]:
     form_key = (form_key or "").strip()
     if form_key:
@@ -23,12 +39,11 @@ def resolve_key(form_key: str | None, settings: Settings) -> tuple[str, KeySourc
     raise MissingKey("No API key: enter one, or set MOONDREAM_API_KEY in the server's .env.")
 
 
-def check_key(api_key: str) -> tuple[bool, str]:
-    """Make one tiny Moondream call to verify the key."""
+def verify_key(api_key: str) -> None:
+    """Make one tiny Moondream call. Raises KeyRejected or MoondreamUnreachable."""
     try:
         MoondreamCloud(api_key, timeout=20).query(Image.new("RGB", (32, 32), "white"), "What color is this?")
-    except AuthError:
-        return False, "Moondream rejected this API key."
+    except AuthError as exc:
+        raise KeyRejected("Moondream rejected this API key.") from exc
     except Exception as exc:
-        return False, f"Couldn't reach Moondream: {exc}"
-    return True, "Key works."
+        raise MoondreamUnreachable(f"Couldn't reach Moondream to check the key: {exc}") from exc

@@ -22,7 +22,7 @@ from ppe.moondream_client import AuthError
 from ppe.video import process_video
 
 from ..schemas.runs import Progress, RunStatus
-from .run_store import RunStore
+from .run_store import RunStore, replace_with_retry
 from .summary import snapshot_name
 
 log = logging.getLogger(__name__)
@@ -88,8 +88,12 @@ class RunRunner:
 
         def on_analysed(entry: dict, frame, results: list[WorkerResult]) -> None:
             progress.frames_analysed += 1
-            self._save_snapshots(paths.snapshots, entry["frame"], frame, results)
-            self._save_preview(paths.preview, frame, results)
+            try:
+                self._save_snapshots(paths.snapshots, entry["frame"], frame, results)
+                self._save_preview(paths.preview, frame, results)
+            except OSError:
+                # e.g. Windows refuses to replace preview.jpg while the browser is fetching it.
+                log.warning("Couldn't save preview/snapshots for frame %d", entry["frame"], exc_info=True)
             with self._live_lock:
                 self._live[run_id].append(entry)
 
@@ -122,7 +126,7 @@ class RunRunner:
             img = cv2.resize(img, (PREVIEW_MAX_WIDTH, int(h * PREVIEW_MAX_WIDTH / w)))
         tmp = path.with_name("preview.tmp.jpg")
         cv2.imwrite(str(tmp), img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        tmp.replace(path)
+        replace_with_retry(tmp, path)
 
     @staticmethod
     def _save_snapshots(folder, frame_idx: int, frame, results: list[WorkerResult]) -> None:

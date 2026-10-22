@@ -1,12 +1,14 @@
-"""Per-frame PPE analysis using Moondream.
+"""PPE checks on tracked workers using Moondream.
 
-For each analysed frame:
-  1. `detect(frame, "person")` finds every worker.
-  2. Each worker is cropped and asked one yes/no question per required PPE item.
-  3. A "no" answer is confirmed with `detect` on the crop: if the item is found
-     it counts as present; if the body part it belongs on (e.g. the head) isn't
-     visible, it's recorded as unverified instead of a violation.
-  4. Confirmed missing items become the violation list for that worker.
+Workers are found and tracked locally (ppe.people). For each worker due a check:
+  1. The worker is cropped and asked one yes/no question per required PPE item.
+  2. A "no" answer is confirmed with `detect` on the crop: if the item is found
+     on this worker (in the right part of their box, and not on a neighbour who
+     overlaps the crop) it counts as present; if the body part it belongs on
+     (e.g. the head) isn't visible, it's recorded as unverified instead.
+  3. Confirmed missing items become the violation list for that worker.
+
+Workers too small to judge are not checked.
 """
 
 from __future__ import annotations
@@ -30,7 +32,9 @@ class WorkerResult:
     box: tuple[int, int, int, int]  # x1, y1, x2, y2 in pixels
     violations: list[str] = field(default_factory=list)  # e.g. ["No Helmet", "No Vest"]
     unverified: list[str] = field(default_factory=list)  # items that couldn't be seen
-    track_id: int | None = None  # person id, stable across frames (set by ppe.tracking)
+    track_id: int | None = None  # person id, stable across frames (from ppe.people)
+    too_small: bool = False  # too far away to check; no PPE verdict
+    pending: bool = False  # tracked but not checked yet (video display only)
 
     @property
     def ok(self) -> bool:
@@ -38,9 +42,27 @@ class WorkerResult:
 
     @property
     def label(self) -> str:
+        if self.too_small:
+            return "Too far to check"
         if self.ok:
             return "PPE OK"
         return f"PPE Violation ({len(self.violations)}) - {', '.join(self.violations)}"
+
+    @property
+    def tag(self) -> str:
+        """Short text for the box in the video, e.g. "#3 Missing: Helmet, Vest"."""
+        if self.too_small:
+            text = "Too far"
+        elif self.pending:
+            text = "Checking..."
+        elif self.violations:
+            text = "Missing: " + ", ".join(v.removeprefix("No ") for v in self.violations)
+        elif self.unverified:
+            text = "OK? " + ", ".join(PPE_CATALOG[i].label.removeprefix("No ") if i in PPE_CATALOG else i
+                                      for i in self.unverified) + " unseen"
+        else:
+            text = "PPE OK"
+        return f"#{self.track_id} {text}" if self.track_id is not None else text
 
 
 def _with_retries(fn, *args, attempts: int = 6, **kwargs):
@@ -77,38 +99,28 @@ class PPEAnalyzer:
         self.model = model
         self._pool = ThreadPoolExecutor(max_workers=config.max_workers)
 
-    # -- detection -----------------------------------------------------------
-    def detect_people(self, image: Image.Image) -> list[tuple[int, int, int, int]]:
-        w, h = image.size
-        objects = _with_retries(self.model.detect, image, "person").get("objects", [])
-        boxes = []
-        for o in objects:
-            coords = [o["x_min"], o["y_min"], o["x_max"], o["y_max"]]
-            # Moondream returns normalised [0, 1] coordinates.
-            if max(coords) <= 1.0:
-                coords = [coords[0] * w, coords[1] * h, coords[2] * w, coords[3] * h]
-            x1, y1, x2, y2 = (int(round(c)) for c in coords)
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(w, x2), min(h, y2)
-            if y2 - y1 < self.config.min_person_height_px or x2 <= x1:
-                continue
-            boxes.append((x1, y1, x2, y2))
-        return _dedupe(boxes)
-
     # -- PPE check -----------------------------------------------------------
-    def _crop(self, image: Image.Image, box) -> Image.Image:
+    def _crop_box(self, image: Image.Image, box) -> tuple[float, float, float, float]:
         w, h = image.size
         x1, y1, x2, y2 = box
         px = (x2 - x1) * self.config.crop_padding
         py = (y2 - y1) * self.config.crop_padding
-        return image.crop(
-            (max(0, x1 - px), max(0, y1 - py), min(w, x2 + px), min(h, y2 + py))
-        )
+        return max(0, x1 - px), max(0, y1 - py), min(w, x2 + px), min(h, y2 + py)
 
-    def _detect_count(self, crop: Image.Image, term: str) -> int:
-        return len(_with_retries(self.model.detect, crop, term).get("objects", []))
+    def _found_on_worker(self, crop: Image.Image, crop_box, term: str, box, others,
+                         region: tuple[float, float]) -> bool:
+        """True if detect() finds `term` on this worker rather than elsewhere in the crop."""
+        cx1, cy1, cx2, cy2 = crop_box
+        cw, ch = cx2 - cx1, cy2 - cy1
+        for o in _with_retries(self.model.detect, crop, term).get("objects", []):
+            # Normalised crop coordinates -> frame pixels.
+            px = cx1 + (o["x_min"] + o["x_max"]) / 2 * cw
+            py = cy1 + (o["y_min"] + o["y_max"]) / 2 * ch
+            if _owner((px, py), box, others, region) == box:
+                return True
+        return False
 
-    def _item_status(self, crop: Image.Image, item: str) -> str:
+    def _item_status(self, crop: Image.Image, crop_box, item: str, box, others) -> str:
         """Returns "present", "missing" or "unverified"."""
         spec = PPE_CATALOG[item]
         question = (
@@ -125,16 +137,21 @@ class PPEAnalyzer:
             return "present"
         # The query model says "no" too eagerly on occluded or cut-off workers,
         # so confirm before flagging a violation.
-        if self._detect_count(crop, spec.detect_term):
+        if self._found_on_worker(crop, crop_box, spec.detect_term, box, others, spec.region):
             return "present"
-        if spec.body_part and not self._detect_count(crop, spec.body_part):
+        if spec.body_part and not self._found_on_worker(crop, crop_box, spec.body_part, box, others,
+                                                         spec.region):
             return "unverified"
         return "missing"
 
-    def check_worker(self, image: Image.Image, box) -> WorkerResult:
-        crop = self._crop(image, box)
+    def check_worker(self, image: Image.Image, box, others=()) -> WorkerResult:
+        """`others` are the other workers' boxes in the frame, so their PPE isn't credited to this one."""
+        if box[3] - box[1] < self.config.min_check_height_frac * image.size[1]:
+            return WorkerResult(box=box, too_small=True)
+        crop_box = self._crop_box(image, box)
+        crop = image.crop(crop_box)
         futures = {
-            item: self._pool.submit(self._item_status, crop, item)
+            item: self._pool.submit(self._item_status, crop, crop_box, item, box, others)
             for item in self.config.required_ppe
         }
         statuses = {item: f.result() for item, f in futures.items()}
@@ -144,31 +161,41 @@ class PPEAnalyzer:
             unverified=[i for i, st in statuses.items() if st == "unverified"],
         )
 
-    def analyze(self, image: Image.Image) -> list[WorkerResult]:
-        boxes = self.detect_people(image)
+    def check_workers(self, image: Image.Image, boxes, all_boxes=None) -> list[WorkerResult]:
+        """Check `boxes` in parallel. `all_boxes` (default: `boxes`) are everyone in the frame,
+        so PPE on a neighbour who isn't being checked right now still isn't credited."""
+        everyone = list(all_boxes if all_boxes is not None else boxes)
+        if not boxes:
+            return []
         # Worker checks submit item queries to the shared pool, so run the
         # per-worker fan-out on a separate pool to avoid deadlock.
-        with ThreadPoolExecutor(max_workers=max(1, len(boxes))) as outer:
-            return list(outer.map(lambda b: self.check_worker(image, b), boxes))
+        with ThreadPoolExecutor(max_workers=len(boxes)) as outer:
+            return list(outer.map(
+                lambda b: self.check_worker(image, b, [o for o in everyone if o != b]), boxes))
 
     def close(self):
         self._pool.shutdown(wait=True)
 
 
-def _dedupe(boxes, overlap: float = 0.7):
-    """Drop boxes mostly contained in a larger one (partial duplicates of one worker)."""
-    def area(b):
-        return max(0, b[2] - b[0]) * max(0, b[3] - b[1])
+def _owner(point, box, others, region: tuple[float, float]):
+    """The worker box `point` belongs to, given where on a worker the item sits; None if nobody's.
 
-    kept = []
-    for b in sorted(boxes, key=area, reverse=True):
-        dup = False
-        for k in kept:
-            ix = max(0, min(b[2], k[2]) - max(b[0], k[0]))
-            iy = max(0, min(b[3], k[3]) - max(b[1], k[1]))
-            if area(b) and ix * iy / area(b) >= overlap:
-                dup = True
-                break
-        if not dup:
-            kept.append(b)
-    return sorted(kept)
+    When several workers overlap at the point, the one whose box centre is horizontally
+    closest (relative to box width) wins, so a worker half-hidden behind another keeps
+    their own vest.
+    """
+    px, py = point
+    best, best_d = None, None
+    for b in (box, *others):
+        bw, bh = b[2] - b[0], b[3] - b[1]
+        if bw <= 0 or bh <= 0:
+            continue
+        if not (b[0] - 0.1 * bw <= px <= b[2] + 0.1 * bw):
+            continue
+        if not (b[1] + region[0] * bh <= py <= b[1] + region[1] * bh):
+            continue
+        d = abs(px - (b[0] + b[2]) / 2) / bw
+        if best_d is None or d < best_d:
+            best, best_d = b, d
+    return best
+

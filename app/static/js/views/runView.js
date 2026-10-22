@@ -114,7 +114,8 @@ function renderProgress(root, run) {
   if (preview.tagName === "IMG") preview.src = api.urls.preview(m.id);
 
   const totalChecks = Math.ceil((m.options.max_seconds ? Math.min(m.options.max_seconds, m.video.duration_sec) : m.video.duration_sec) / m.options.analysis_interval_sec);
-  page.replaceChildren(
+  // replaceChildren() would print a null child as the text "null", so drop it first.
+  page.replaceChildren(...[
     header(run),
     h("section", { class: "card progress-card" },
       h("div", { class: "preview" }, preview),
@@ -128,7 +129,7 @@ function renderProgress(root, run) {
           h("dt", {}, "Workers seen (peak)"), h("dd", {}, s ? s.peak_workers : "–"),
           h("dt", {}, "Checks with violations"), h("dd", {}, s ? `${s.violation_checks} / ${s.worker_checks}` : "–")),
         h("p", { class: "hint" }, "You can leave this page; the run keeps going and appears in the sidebar."))),
-    s && s.timeline.length ? timelineCard(s, m, null) : null);
+    s && s.timeline.length ? timelineCard(s, m, null) : null].filter(Boolean));
 }
 
 // ---------------------------------------------------------------- failed
@@ -171,19 +172,6 @@ function timelineCard(s, m, video) {
     video.addEventListener("timeupdate", sync);
     video.addEventListener("seeked", sync);
   }
-
-  // Table view of the same data (accessibility + exact numbers).
-  const tableWrap = h("div", { class: "table-wrap", hidden: true },
-    h("table", {},
-      h("thead", {}, h("tr", {}, h("th", {}, "Time"), h("th", {}, "Workers"), h("th", {}, "PPE OK"), h("th", {}, "Violations"))),
-      h("tbody", {}, s.timeline.map((p) => h("tr", {},
-        h("td", {}, fmt.timePrecise(p.time_sec)), h("td", {}, p.workers),
-        h("td", {}, p.workers - p.violations), h("td", {}, p.violations))))));
-  const toggle = h("button", { class: "btn btn-ghost table-toggle", type: "button", onclick: () => {
-    tableWrap.hidden = !tableWrap.hidden;
-    toggle.textContent = tableWrap.hidden ? "Show as table" : "Hide table";
-  } }, "Show as table");
-  card.append(toggle, tableWrap);
   return card;
 }
 
@@ -195,13 +183,21 @@ function byTypeCard(s) {
         h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(t.count / max) * 100}%` })))))
     : h("div", { class: "empty-note" }, h("span", { html: icons.check }), "No violations found in any checked frame.");
 
-  const unv = s.unverified.length
+  // Share of worker checks where an item couldn't be seen; above half, its results say little.
+  const share = (t) => t.count / Math.max(1, s.worker_checks);
+  const low = s.unverified.filter((t) => share(t) > 0.5).map((t) => t.label);
+  const unv = s.unverified.length || s.too_small_checks
     ? [h("div", { class: "divider" }),
        h("h3", {}, "Couldn't verify"),
        h("p", { class: "hint", style: "margin:4px 0 12px" }, "Item not visible (worker cut off or blocked). Not counted as violations."),
+       low.length ? h("p", { class: "hint warn-note", style: "margin:0 0 12px" },
+         `Low coverage: ${low.join(", ")} could only be checked in a minority of checks, so a clean result for ${low.length > 1 ? "them" : "it"} means little.`) : null,
        h("div", { class: "hbars" }, s.unverified.map((t) => h("div", { class: "hbar is-warn" },
-         h("div", { class: "row" }, h("span", {}, t.label), h("b", { class: "num" }, t.count)),
-         h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(t.count / Math.max(1, s.worker_checks)) * 100}%` }))))),
+         h("div", { class: "row" }, h("span", {}, t.label),
+           h("b", { class: "num" }, `${t.count} of ${s.worker_checks} · ${Math.round(share(t) * 100)}%`)),
+         h("div", { class: "track" }, h("div", { class: "fill", style: `width:${share(t) * 100}%` }))))),
+       s.too_small_checks ? h("p", { class: "hint", style: "margin-top:12px" },
+         `${plural(s.too_small_checks, "worker sighting")} too far away to check; left out of all figures.`) : null,
       ]
     : [];
 

@@ -17,6 +17,7 @@ class Settings:
     server_api_key: str | None  # fallback when the form leaves the key empty
     max_upload_mb: int = 1024
     max_workers: int = 4  # parallel Moondream requests within one run
+    person_model: Path | None = None  # YOLO weights for person tracking; None = models/yolo11n.pt
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -26,4 +27,6 @@ class Settings:
             server_api_key=os.getenv("MOONDREAM_API_KEY") or None,
             max_upload_mb=int(os.getenv("MAX_UPLOAD_MB", "1024")),
             max_workers=int(os.getenv("MAX_WORKERS", "4")),
+            person_model=(PROJECT_ROOT / os.environ["PERSON_MODEL"]).resolve()
+            if os.getenv("PERSON_MODEL") else None,
         )

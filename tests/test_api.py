@@ -12,7 +12,7 @@ from app.main import create_app
 from app.services.keys import KeyRejected
 from ppe.analyzer import PPEAnalyzer
 
-from .test_pipeline import FakeModel
+from .test_pipeline import FakeModel, FakePeople
 
 
 def _video(path, frames=25, fps=10):
@@ -38,7 +38,8 @@ def client(tmp_path):
         if key == "bad-key":
             raise KeyRejected("Moondream rejected this API key.")
 
-    app = create_app(settings, analyzer_factory=factory, key_verifier=verify)
+    app = create_app(settings, analyzer_factory=factory, key_verifier=verify,
+                     people_factory=lambda fps: FakePeople())
     with TestClient(app) as c:
         c.seen_keys = seen_keys
         yield c

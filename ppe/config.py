@@ -14,16 +14,20 @@ class PPEItem:
     question: str  # fragment for "Is this person wearing ...?"
     detect_term: str  # object name used to confirm a "no" answer with detect()
     body_part: str | None = None  # if this can't be found, the item is unverifiable, not a violation
+    # Where on the worker the item (and its body part) sits, as fractions of the person box
+    # height from the top. A detection elsewhere, or on a neighbour, doesn't count.
+    region: tuple[float, float] = (0.0, 1.0)
 
 
 # PPE items the pipeline knows how to check.
 PPE_CATALOG: dict[str, PPEItem] = {
-    "helmet": PPEItem("No Helmet", "a hard hat / safety helmet on their head", "hard hat", "head"),
-    "vest": PPEItem("No Vest", "a high-visibility safety vest or hi-vis jacket", "high visibility vest"),
+    "helmet": PPEItem("No Helmet", "a hard hat / safety helmet on their head", "hard hat", "head", (-0.1, 0.35)),
+    "vest": PPEItem("No Vest", "a high-visibility safety vest or hi-vis jacket", "high visibility vest",
+                    region=(0.1, 0.8)),
     "gloves": PPEItem("No Gloves", "protective work gloves on their hands", "work glove", "hand"),
-    "boots": PPEItem("No Boots", "safety boots / work boots", "boot", "foot"),
-    "goggles": PPEItem("No Goggles", "safety goggles or safety glasses", "safety goggles", "face"),
-    "mask": PPEItem("No Mask", "a face mask or respirator", "face mask", "face"),
+    "boots": PPEItem("No Boots", "safety boots / work boots", "boot", "foot", (0.6, 1.1)),
+    "goggles": PPEItem("No Goggles", "safety goggles or safety glasses", "safety goggles", "face", (-0.05, 0.35)),
+    "mask": PPEItem("No Mask", "a face mask or respirator", "face mask", "face", (-0.05, 0.4)),
 }
 
 
@@ -43,8 +47,10 @@ class Config:
     required_ppe: list[str] = field(default_factory=lambda: ["helmet", "vest"])
     analysis_interval_sec: float = 1.0
     max_workers: int = 4
-    min_person_height_px: int = 40
-    crop_padding: float = 0.15
+    min_check_height_frac: float = 0.08  # smaller workers (vs frame height) are tracked but not checked
+    person_model: str | None = None  # YOLO weights for person tracking; None = models/yolo11n.pt
+    person_imgsz: int = 640  # detector input size
+    crop_padding: float = 0.05  # wider crops pull in neighbours, which sways the yes/no answer
 
     @classmethod
     def from_env(cls, **overrides) -> "Config":
@@ -59,6 +65,7 @@ class Config:
             required_ppe=parse_required(os.getenv("REQUIRED_PPE")),
             analysis_interval_sec=float(os.getenv("ANALYSIS_INTERVAL_SEC", "1.0")),
             max_workers=int(os.getenv("MAX_WORKERS", "4")),
+            person_model=os.getenv("PERSON_MODEL") or None,
         )
         for k, v in overrides.items():
             if v is None:

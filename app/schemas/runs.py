@@ -99,13 +99,14 @@ class RunSummary(BaseModel):
     frames_analysed: int
     peak_workers: int
     avg_workers: float
-    worker_checks: int  # sum over checked frames of workers seen
+    worker_checks: int  # sum over checked frames of workers checked (too-far-away ones excluded)
     ok_checks: int
     violation_checks: int
     compliance_rate: float | None  # ok_checks / worker_checks
     frames_with_violation: int
     by_type: list[TypeCount]
     unverified: list[TypeCount]
+    too_small_checks: int = 0  # worker sightings too far away to check
     timeline: list[TimelinePoint]
     events: list[ViolationEvent]
     tracked: bool = False  # run has person ids

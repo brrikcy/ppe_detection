@@ -17,14 +17,15 @@ from .core.settings import Settings
 from .services.keys import KeyVerifier, verify_key
 from .services.media import VideoConverter
 from .services.run_store import RunStore
-from .services.runner import AnalyzerFactory, RunRunner, default_analyzer_factory
+from .services.runner import AnalyzerFactory, PeopleFactory, RunRunner, default_analyzer_factory
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 
 def create_app(settings: Settings | None = None,
                analyzer_factory: AnalyzerFactory = default_analyzer_factory,
-               key_verifier: KeyVerifier = verify_key) -> FastAPI:
+               key_verifier: KeyVerifier = verify_key,
+               people_factory: PeopleFactory | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
 
     @asynccontextmanager
@@ -39,7 +40,8 @@ def create_app(settings: Settings | None = None,
     app.state.store = store
     app.state.verify_key = key_verifier
     app.state.video_converter = VideoConverter()
-    app.state.runner = RunRunner(store, analyzer_factory, max_workers=settings.max_workers)
+    app.state.runner = RunRunner(store, analyzer_factory, max_workers=settings.max_workers,
+                                 people_factory=people_factory, person_model=settings.person_model)
 
     app.include_router(config_routes.router)
     app.include_router(runs_routes.router)

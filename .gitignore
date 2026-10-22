@@ -9,3 +9,4 @@ inputs/
 *.mov
 *.mkv
 runs/
+models/*.pt

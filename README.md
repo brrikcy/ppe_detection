@@ -2,32 +2,40 @@
 
 Takes a construction-site video and produces an annotated copy where every worker gets a tag:
 
-- **`PPE OK`** (green box) when they're wearing all the required PPE
-- **`PPE Violation (N) - No Helmet, No Vest`** (red box) listing each missing item
+- **`#3 PPE OK`** (green box) when they're wearing all the required PPE
+- **`#3 Missing: Helmet, Vest`** (red box) listing each missing item
+- **`#3 OK? Helmet unseen`** (amber box) when an item couldn't be seen at the last check
+- **`#3 Checking...`** / **`#3 Too far`** (grey box) before the first check, or when a worker is too small to judge
 
-All vision runs on the [Moondream](https://moondream.ai) Cloud API.
+People are found and tracked locally on every frame with [Ultralytics](https://docs.ultralytics.com) YOLO11n and BoT-SORT. The PPE questions go to the [Moondream](https://moondream.ai) Cloud API.
 
 ## How it works
 
-1. A frame is sampled every `ANALYSIS_INTERVAL_SEC` seconds (default 1s).
-2. Moondream `detect("person")` finds every worker in the frame.
-3. Each worker is cropped, and Moondream `query` is asked a yes/no question for each required PPE item. These calls run in parallel.
-   - A "no" answer is double-checked with `detect` on the crop. If the item is found (e.g. a `hard hat`), it counts as present.
-   - If the body part it belongs on (e.g. the `head`) can't be found, because the worker is cut off or blocked from view, the item is recorded as `unverified` in the JSON report and isn't counted as a violation.
-   - Person boxes mostly inside a larger box are dropped as duplicates.
-4. **Person tracking** (`ppe/tracking.py`): every worker gets an ID that stays with them.
-   - Between checks, each box follows its worker using optical flow.
-   - At each check, detections are matched to existing people by box overlap and clothing colour.
-   - Someone hidden for up to 3 checks keeps their ID.
-5. Boxes and tags (`#3 PPE Violation (1) - No Gloves`) are drawn on every frame. Between checks, a worker keeps their most recent status.
-6. The output is re-encoded to H.264 with the original audio, using the system `ffmpeg` or the copy bundled with `imageio-ffmpeg`. A JSON report is written next to it.
+1. **Every frame: find and track people** (`ppe/people.py`).
+   - YOLO11n finds people (the frame is scaled to 640px for this), and BoT-SORT links them over time, so each worker keeps one ID.
+   - BoT-SORT predicts motion with a Kalman filter and corrects for camera motion. It also uses weak detections to keep a partly hidden worker.
+   - A lost worker keeps their ID for 8 seconds. Tracks younger than 0.3s are treated as flicker and not shown or checked.
+2. **Every `ANALYSIS_INTERVAL_SEC` seconds (default 1s): check PPE** (`ppe/analyzer.py`). Every tracked worker is cropped, and Moondream `query` is asked a yes/no question for each required PPE item. These calls run in parallel.
+   - A "no" answer is double-checked with `detect` on the crop. If the item is found on this worker (e.g. a `hard hat` near the top of their box, not on a neighbour who overlaps the crop), it counts as present.
+   - If the body part it belongs on (e.g. the `head`) can't be found on this worker, because they are cut off or blocked from view, the item is recorded as `unverified` in the JSON report and isn't counted as a violation.
+   - A worker who appears between checks is checked straight away, unless the next check is less than half an interval away.
+   - Workers shorter than 8% of the frame height are drawn grey ("Too far") and left out of the figures, with no API calls spent on them.
+   - If a check fails after retries, that frame is skipped rather than recorded with old results.
+3. **Status shown in the video** (`ppe/status.py`): an item is shown as missing when it was missing in most of the worker's last 3 checks. On a tie the previous state holds, so one misread doesn't flip the box.
+4. Boxes and tags are drawn on every frame; tags are moved so they don't cover each other or the counts bar.
+5. Frames are piped straight into ffmpeg (H.264, with the original audio), so the video is compressed once. It uses the system `ffmpeg` or the copy bundled with `imageio-ffmpeg`. A JSON report is written next to it.
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
 cp .env.example .env   # then put your key in MOONDREAM_API_KEY
+curl -L -o models/yolo11n.pt https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt
 ```
+
+The person model (about 5 MB) is loaded from `models/yolo11n.pt`; set `PERSON_MODEL` in `.env` to use other YOLO weights. Ultralytics is AGPL-3.0. It runs on the CPU unless PyTorch finds a GPU; on a laptop CPU, tracking takes about 70 ms per frame for 1080p and 150 ms for 4K.
+
+If `opencv-python-headless` is already installed, Ultralytics' `opencv-python` dependency overwrites the same `cv2` files. Either keep one of the two, or install Ultralytics with `pip install --no-deps ultralytics` and add its other dependencies by hand.
 
 ## Web app
 
@@ -80,30 +88,37 @@ app/
   api/routes/           config.py, runs.py
   static/               index.html, styles.css, js/ (api, ui, charts, views/)
 ppe/                    detection pipeline (shared with the CLI)
+  people.py             YOLO11n + BoT-SORT person tracking, every frame
+  analyzer.py           Moondream PPE checks on tracked workers
+  status.py             per-worker status voted over recent checks
+  video.py              the frame loop: track, check, draw, encode
+  annotate.py           boxes and tags
+  media.py              ffmpeg output
 ```
 
 ## Command line
 
 ```bash
 python annotate_video.py site.mp4                       # -> outputs/site_annotated.mp4 + .json
-python annotate_video.py site.mp4 --interval 0.5        # analyse 2 frames/sec
+python annotate_video.py site.mp4 --interval 0.5        # check PPE twice a second
 python annotate_video.py site.mp4 --required helmet,vest,gloves
 python annotate_video.py site.mp4 --max-seconds 10      # quick trial on the first 10s
 ```
 
 Supported PPE items: `helmet`, `vest`, `gloves`, `boots`, `goggles`, `mask` (default: `helmet,vest`).
 
-**Cost:** each analysed frame makes `1 + workers × required_items` API calls, plus 1–2 confirmation calls for each "no" answer. A 60s clip with 5 workers, checking helmet and vest at 1s intervals, makes about 660 calls.
+**Cost:** each check makes `workers × required_items` API calls, plus 1–2 confirmation calls for each "no" answer, plus one extra check for each worker who appears between checks. A 60s clip with 5 workers, checking helmet and vest at 1s intervals, makes about 600–700 calls.
 
 ## Known limitations
 
-- A worker whose head is cut off can still be flagged if another worker's head falls inside their box.
-- In the video, a worker's tag shows their latest check, so it can flicker between seconds. The People section smooths this with the majority rule.
-- Tracking assumes a continuous shot. A scene cut, or two workers crossing while they look alike, can start a new ID or swap two IDs. Someone seen in only one check may be a brief appearance or a misdetection.
+- Masks, goggles, gloves and boots often can't be seen. The dashboard warns when an item could only be checked in a minority of checks.
+- Someone hidden for more than 8 seconds, or who comes out from behind another worker far from where they went in, gets a new ID. BoT-SORT's appearance ReID didn't help on our test videos, so it is off.
+- With a camera moving through a group, people at the frame edges are detected on and off, which starts new IDs.
+- Tracking assumes a continuous shot. A scene cut, or two workers crossing while they look alike, can start a new ID or swap two IDs.
 - Moondream's free tier rate-limits (HTTP 429). Requests are retried with backoff, and lowering `MAX_WORKERS` reduces how often this happens.
 
 ## Tests
 
 ```bash
-python -m pytest -q   # offline, uses a fake Moondream model
+python -m pytest -q   # offline, uses a fake Moondream model and a fake person tracker
 ```

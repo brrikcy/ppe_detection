@@ -11,6 +11,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
 
 import cv2
@@ -28,6 +29,7 @@ from .summary import frame_name, person_photo_name, snapshot_name
 log = logging.getLogger(__name__)
 
 AnalyzerFactory = Callable[[Config], PPEAnalyzer]
+PeopleFactory = Callable[[float], object]  # fps -> person tracker; None = YOLO (ppe.people)
 
 PREVIEW_MAX_WIDTH = 1280
 SNAPSHOT_MAX_HEIGHT = 320
@@ -40,9 +42,12 @@ def default_analyzer_factory(config: Config) -> PPEAnalyzer:
 
 class RunRunner:
     def __init__(self, store: RunStore, analyzer_factory: AnalyzerFactory = default_analyzer_factory,
-                 max_workers: int = 4):
+                 max_workers: int = 4, people_factory: PeopleFactory | None = None,
+                 person_model: Path | None = None):
         self.store = store
         self.analyzer_factory = analyzer_factory
+        self.people_factory = people_factory
+        self.person_model = person_model
         self.max_workers = max_workers
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="run")
         self._live: dict[str, list[dict]] = {}  # timeline so far for active runs
@@ -70,6 +75,7 @@ class RunRunner:
             required_ppe=opts.required_ppe,
             analysis_interval_sec=opts.analysis_interval_sec,
             max_workers=self.max_workers,
+            person_model=str(self.person_model) if self.person_model else None,
         )
         with self._live_lock:
             self._live[run_id] = []
@@ -104,7 +110,8 @@ class RunRunner:
         analyzer = self.analyzer_factory(config)
         try:
             process_video(paths.input(), paths.output, analyzer, max_seconds=opts.max_seconds,
-                          on_progress=on_progress, on_analysed=on_analysed)
+                          on_progress=on_progress, on_analysed=on_analysed,
+                          people_factory=self.people_factory)
             progress.frames_done = progress.frames_total = max(progress.frames_done, 1)
             self.store.update(run_id, status=RunStatus.completed, progress=progress,
                               finished_at=datetime.now(timezone.utc))

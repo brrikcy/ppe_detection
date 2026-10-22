@@ -1,9 +1,12 @@
 requests>=2.31
-opencv-python-headless>=4.8
+opencv-python>=4.8  # ultralytics needs the full build; the headless build also works if already installed
 numpy>=1.24
 pillow>=10.0
 python-dotenv>=1.0
 imageio-ffmpeg>=0.5  # bundled ffmpeg for H.264 output when none is installed
+# Person detection + tracking (YOLO11n + BoT-SORT); AGPL-3.0
+ultralytics>=8.4
+lap>=0.5.12
 # Web app
 fastapi>=0.115
 uvicorn[standard]>=0.30

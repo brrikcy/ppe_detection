@@ -35,7 +35,7 @@ def build_people(timeline: list[dict], available_photos: set[str] | None = None)
     for entry in timeline:
         for w in entry["workers"]:
             tid = w.get("track_id")
-            if tid is None:
+            if tid is None or w.get("too_small"):
                 continue
             p = people.setdefault(tid, {"first": entry["time_sec"], "checks": 0, "bad": 0,
                                         "missing": Counter(), "latest": []})
@@ -72,12 +72,15 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
     by_type: Counter[str] = Counter()
     unverified: Counter[str] = Counter()
     points, events = [], []
-    worker_checks = violation_checks = frames_with_violation = peak = 0
+    worker_checks = violation_checks = frames_with_violation = peak = too_small = 0
 
     for entry in timeline:
         workers = entry["workers"]
         n_bad = 0
         for i, w in enumerate(workers):
+            if w.get("too_small"):
+                too_small += 1
+                continue
             for item in w.get("unverified", []):
                 unverified[PPE_CATALOG[item].label.removeprefix("No ") if item in PPE_CATALOG else item] += 1
             if not w["violations"]:
@@ -95,7 +98,7 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
                 frame_image=(frame_name(entry["frame"])
                              if available_frames is None or frame_name(entry["frame"]) in available_frames else None),
             ))
-        worker_checks += len(workers)
+        worker_checks += sum(not w.get("too_small") for w in workers)
         violation_checks += n_bad
         frames_with_violation += bool(n_bad)
         peak = max(peak, len(workers))
@@ -105,7 +108,7 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
     return RunSummary(
         frames_analysed=n,
         peak_workers=peak,
-        avg_workers=round(worker_checks / n, 2) if n else 0.0,
+        avg_workers=round((worker_checks + too_small) / n, 2) if n else 0.0,
         worker_checks=worker_checks,
         ok_checks=worker_checks - violation_checks,
         violation_checks=violation_checks,
@@ -113,6 +116,7 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
         frames_with_violation=frames_with_violation,
         by_type=[TypeCount(label=k, count=v) for k, v in by_type.most_common()],
         unverified=[TypeCount(label=k, count=v) for k, v in unverified.most_common()],
+        too_small_checks=too_small,
         timeline=points,
         events=events,
         tracked=any(w.get("track_id") is not None for e in timeline for w in e["workers"]),

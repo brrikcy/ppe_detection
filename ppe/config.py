@@ -7,15 +7,23 @@ from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
+
+@dataclass(frozen=True)
+class PPEItem:
+    label: str  # shown in a violation, e.g. "No Helmet"
+    question: str  # fragment for "Is this person wearing ...?"
+    detect_term: str  # object name used to confirm a "no" answer with detect()
+    body_part: str | None = None  # if this can't be found, the item is unverifiable, not a violation
+
+
 # PPE items the pipeline knows how to check.
-# key -> (label shown in a violation, question fragment sent to Moondream)
-PPE_CATALOG: dict[str, tuple[str, str]] = {
-    "helmet": ("No Helmet", "a hard hat / safety helmet on their head"),
-    "vest": ("No Vest", "a high-visibility safety vest or hi-vis jacket"),
-    "gloves": ("No Gloves", "protective work gloves on their hands"),
-    "boots": ("No Boots", "safety boots / work boots"),
-    "goggles": ("No Goggles", "safety goggles or safety glasses"),
-    "mask": ("No Mask", "a face mask or respirator"),
+PPE_CATALOG: dict[str, PPEItem] = {
+    "helmet": PPEItem("No Helmet", "a hard hat / safety helmet on their head", "hard hat", "head"),
+    "vest": PPEItem("No Vest", "a high-visibility safety vest or hi-vis jacket", "high visibility vest"),
+    "gloves": PPEItem("No Gloves", "protective work gloves on their hands", "work glove", "hand"),
+    "boots": PPEItem("No Boots", "safety boots / work boots", "boot", "foot"),
+    "goggles": PPEItem("No Goggles", "safety goggles or safety glasses", "safety goggles", "face"),
+    "mask": PPEItem("No Mask", "a face mask or respirator", "face mask", "face"),
 }
 
 

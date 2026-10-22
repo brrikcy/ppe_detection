@@ -64,7 +64,7 @@ def process_video(
                 timeline.append({
                     "frame": idx,
                     "time_sec": round(idx / fps, 2),
-                    "workers": [{"box": r.box, "label": r.label, "violations": r.violations}
+                    "workers": [{"box": r.box, "label": r.label, "violations": r.violations, "unverified": r.unverified}
                                 for r in current],
                 })
                 n_bad = sum(not r.ok for r in current)

@@ -3,12 +3,16 @@
 For each analysed frame:
   1. `detect(frame, "person")` finds every worker.
   2. Each worker is cropped and asked one yes/no question per required PPE item.
-  3. Missing items become the violation list for that worker.
+  3. A "no" answer is confirmed with `detect` on the crop: if the item is found
+     it counts as present; if the body part it belongs on (e.g. the head) isn't
+     visible, it's recorded as unverified instead of a violation.
+  4. Confirmed missing items become the violation list for that worker.
 """
 
 from __future__ import annotations
 
 import logging
+import random
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -24,6 +28,7 @@ log = logging.getLogger(__name__)
 class WorkerResult:
     box: tuple[int, int, int, int]  # x1, y1, x2, y2 in pixels
     violations: list[str] = field(default_factory=list)  # e.g. ["No Helmet", "No Vest"]
+    unverified: list[str] = field(default_factory=list)  # items that couldn't be seen
 
     @property
     def ok(self) -> bool:
@@ -36,7 +41,7 @@ class WorkerResult:
         return f"PPE Violation ({len(self.violations)}) - {', '.join(self.violations)}"
 
 
-def _with_retries(fn, *args, attempts: int = 4, **kwargs):
+def _with_retries(fn, *args, attempts: int = 6, **kwargs):
     delay = 1.0
     for i in range(attempts):
         try:
@@ -45,7 +50,7 @@ def _with_retries(fn, *args, attempts: int = 4, **kwargs):
             if i == attempts - 1:
                 raise
             log.warning("Moondream call failed (%s); retrying in %.0fs", exc, delay)
-            time.sleep(delay)
+            time.sleep(delay + random.uniform(0, 0.5))
             delay *= 2
 
 
@@ -84,7 +89,7 @@ class PPEAnalyzer:
             if y2 - y1 < self.config.min_person_height_px or x2 <= x1:
                 continue
             boxes.append((x1, y1, x2, y2))
-        return boxes
+        return _dedupe(boxes)
 
     # -- PPE check -----------------------------------------------------------
     def _crop(self, image: Image.Image, box) -> Image.Image:
@@ -96,28 +101,44 @@ class PPEAnalyzer:
             (max(0, x1 - px), max(0, y1 - py), min(w, x2 + px), min(h, y2 + py))
         )
 
-    def _has_item(self, crop: Image.Image, item: str) -> bool:
-        description = PPE_CATALOG[item][1]
+    def _detect_count(self, crop: Image.Image, term: str) -> int:
+        return len(_with_retries(self.model.detect, crop, term).get("objects", []))
+
+    def _item_status(self, crop: Image.Image, item: str) -> str:
+        """Returns "present", "missing" or "unverified"."""
+        spec = PPE_CATALOG[item]
         question = (
             f"Focus on the main person in the centre of this image. "
-            f"Is this person wearing {description}? Answer only yes or no."
+            f"Is this person wearing {spec.question}? Answer only yes or no."
         )
         answer = _with_retries(self.model.query, crop, question).get("answer", "")
         verdict = _is_yes(answer)
         if verdict is None:
             log.debug("Unclear answer for %s: %r - treating as present", item, answer)
             # Benefit of the doubt: don't flag a violation on an ambiguous answer.
-            return True
-        return verdict
+            return "present"
+        if verdict:
+            return "present"
+        # The query model says "no" too eagerly on occluded or cut-off workers,
+        # so confirm before flagging a violation.
+        if self._detect_count(crop, spec.detect_term):
+            return "present"
+        if spec.body_part and not self._detect_count(crop, spec.body_part):
+            return "unverified"
+        return "missing"
 
     def check_worker(self, image: Image.Image, box) -> WorkerResult:
         crop = self._crop(image, box)
         futures = {
-            item: self._pool.submit(self._has_item, crop, item)
+            item: self._pool.submit(self._item_status, crop, item)
             for item in self.config.required_ppe
         }
-        violations = [PPE_CATALOG[item][0] for item, f in futures.items() if not f.result()]
-        return WorkerResult(box=box, violations=violations)
+        statuses = {item: f.result() for item, f in futures.items()}
+        return WorkerResult(
+            box=box,
+            violations=[PPE_CATALOG[i].label for i, st in statuses.items() if st == "missing"],
+            unverified=[i for i, st in statuses.items() if st == "unverified"],
+        )
 
     def analyze(self, image: Image.Image) -> list[WorkerResult]:
         boxes = self.detect_people(image)
@@ -128,3 +149,22 @@ class PPEAnalyzer:
 
     def close(self):
         self._pool.shutdown(wait=True)
+
+
+def _dedupe(boxes, overlap: float = 0.7):
+    """Drop boxes mostly contained in a larger one (partial duplicates of one worker)."""
+    def area(b):
+        return max(0, b[2] - b[0]) * max(0, b[3] - b[1])
+
+    kept = []
+    for b in sorted(boxes, key=area, reverse=True):
+        dup = False
+        for k in kept:
+            ix = max(0, min(b[2], k[2]) - max(b[0], k[0]))
+            iy = max(0, min(b[3], k[3]) - max(b[1], k[1]))
+            if area(b) and ix * iy / area(b) >= overlap:
+                dup = True
+                break
+        if not dup:
+            kept.append(b)
+    return sorted(kept)

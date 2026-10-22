@@ -15,8 +15,12 @@ All vision runs on the [Moondream](https://moondream.ai) Cloud API.
    - A "no" answer is double-checked with `detect` on the crop. If the item is found (e.g. a `hard hat`), it counts as present.
    - If the body part it belongs on (e.g. the `head`) can't be found, because the worker is cut off or blocked from view, the item is recorded as `unverified` in the JSON report and isn't counted as a violation.
    - Person boxes mostly inside a larger box are dropped as duplicates.
-4. Boxes and tags are drawn on every frame. Between sampled frames, the most recent results are held.
-5. The output is re-encoded to H.264 with the original audio (if `ffmpeg` is installed), and a JSON report is written next to it.
+4. **Person tracking** (`ppe/tracking.py`): every worker gets an ID that stays with them.
+   - Between checks, each box follows its worker using optical flow.
+   - At each check, detections are matched to existing people by box overlap and clothing colour.
+   - Someone hidden for up to 3 checks keeps their ID.
+5. Boxes and tags (`#3 PPE Violation (1) - No Gloves`) are drawn on every frame. Between checks, a worker keeps their most recent status.
+6. The output is re-encoded to H.264 with the original audio, using the system `ffmpeg` or the copy bundled with `imageio-ffmpeg`. A JSON report is written next to it.
 
 ## Setup
 
@@ -38,7 +42,10 @@ python run.py          # opens http://127.0.0.1:8000
    - the annotated video
    - violations by type, and items it couldn't verify
    - a compliance timeline; click a column to jump the video there
-   - a snapshot card for every flagged worker
+   - **People**: one card per tracked worker with their ID, photo, overall status, time on screen and how often each item was missing.
+     - A person is **flagged** for an item when it was missing in more than half of their checks.
+     - Fewer than half shows as **occasional**.
+   - a snapshot card for every flagged worker; click one to open the image viewer (← → to browse, full frame or worker crop, "Show in video")
 4. Every run is saved under `runs/<id>/` and listed in the sidebar, so you can switch between runs or delete them.
 
 Runs execute one at a time; any others wait as *queued*. The annotated video is H.264, which plays in Chrome, Edge, Safari and Firefox.
@@ -52,7 +59,7 @@ Runs execute one at a time; any others wait as *queued*. The annotated video is 
 | POST | `/api/runs` | Multipart: `video`, `api_key?`, `required_ppe`, `analysis_interval_sec`, `max_seconds?` |
 | GET | `/api/runs` | All runs, newest first |
 | GET | `/api/runs/{id}` | Status, progress and dashboard summary (partial while running) |
-| GET | `/api/runs/{id}/video` · `/report` · `/preview` · `/snapshots/{name}` | Media |
+| GET | `/api/runs/{id}/video` · `/report` · `/preview` · `/snapshots/{name}` · `/frames/{name}` · `/people/{name}` | Media |
 | DELETE | `/api/runs/{id}` | Delete a finished run |
 
 Interactive docs: http://127.0.0.1:8000/docs
@@ -91,7 +98,8 @@ Supported PPE items: `helmet`, `vest`, `gloves`, `boots`, `goggles`, `mask` (def
 ## Known limitations
 
 - A worker whose head is cut off can still be flagged if another worker's head falls inside their box.
-- Each checked frame is analysed independently, so tags can flicker between seconds. Requiring a violation to persist across consecutive checks would fix this.
+- In the video, a worker's tag shows their latest check, so it can flicker between seconds. The People section smooths this with the majority rule.
+- Tracking assumes a continuous shot. A scene cut, or two workers crossing while they look alike, can start a new ID or swap two IDs. Someone seen in only one check may be a brief appearance or a misdetection.
 - Moondream's free tier rate-limits (HTTP 429). Requests are retried with backoff, and lowering `MAX_WORKERS` reduces how often this happens.
 
 ## Tests

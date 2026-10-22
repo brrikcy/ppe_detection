@@ -30,6 +30,7 @@ class WorkerResult:
     box: tuple[int, int, int, int]  # x1, y1, x2, y2 in pixels
     violations: list[str] = field(default_factory=list)  # e.g. ["No Helmet", "No Vest"]
     unverified: list[str] = field(default_factory=list)  # items that couldn't be seen
+    track_id: int | None = None  # person id, stable across frames (set by ppe.tracking)
 
     @property
     def ok(self) -> bool:

@@ -9,6 +9,7 @@ Layout:
         preview.jpg      latest analysed frame, annotated (updated while running)
         snapshots/       crops of workers with violations
         frames/          full annotated frames that contain a violation
+        people/          best (largest) crop of each tracked person, <track_id>.jpg
 """
 
 from __future__ import annotations
@@ -69,6 +70,10 @@ class RunPaths:
     def frames(self) -> Path:
         return self.root / "frames"
 
+    @property
+    def people(self) -> Path:
+        return self.root / "people"
+
     def input(self) -> Path | None:
         return next(iter(sorted(self.root.glob("input.*"))), None)
 
@@ -95,6 +100,7 @@ class RunStore:
         p.root.mkdir(parents=True)
         p.snapshots.mkdir()
         p.frames.mkdir()
+        p.people.mkdir()
         return p
 
     def save(self, meta: RunMeta) -> None:

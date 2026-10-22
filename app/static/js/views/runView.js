@@ -225,16 +225,8 @@ function eventsCard(run, s, video) {
       type: "button", "aria-pressed": String(filter === t),
       onclick: () => { filter = t; shown = EVENTS_PAGE; draw(); },
     }, t ?? `All (${s.events.length})`)));
-    const items = list.map((e) => ({
-      ...e,
-      cropUrl: e.snapshot ? api.urls.snapshot(run.meta.id, e.snapshot) : null,
-      frameUrl: e.frame_image ? api.urls.frame(run.meta.id, e.frame_image) : null,
-    }));
-    const showInVideo = (e) => {
-      video.currentTime = e.time_sec + 0.05;
-      video.scrollIntoView({ behavior: "smooth", block: "center" });
-      video.play().catch(() => {});
-    };
+    const items = eventItems(run, list);
+    const showInVideo = (e) => seekTo(video, e.time_sec);
     grid.replaceChildren(...list.slice(0, shown).map((e, i) => h("button", {
       class: "event", type: "button", title: "Open image",
       onclick: () => openLightbox(items, i, { onShowInVideo: showInVideo }),
@@ -243,7 +235,7 @@ function eventsCard(run, s, video) {
         ? h("img", { src: api.urls.snapshot(run.meta.id, e.snapshot), alt: `Worker at ${fmt.timePrecise(e.time_sec)}`, loading: "lazy" })
         : h("span", { class: "hint" }, "No snapshot")),
       h("div", { class: "body" },
-        h("span", { class: "time" }, fmt.timePrecise(e.time_sec)),
+        h("span", { class: "time" }, e.track_id != null ? `#${e.track_id} · ${fmt.timePrecise(e.time_sec)}` : fmt.timePrecise(e.time_sec)),
         h("div", { class: "tags" }, e.violations.map((v) => h("span", { class: "tag-bad" }, v)))))));
     more.replaceChildren(list.length > shown
       ? h("button", { class: "btn", type: "button", onclick: () => { shown += EVENTS_PAGE; draw(); } }, `Show more (${list.length - shown} left)`)
@@ -263,6 +255,81 @@ function eventsCard(run, s, video) {
     grid, more);
 }
 
+function seekTo(video, t) {
+  video.currentTime = t + 0.05;
+  video.scrollIntoView({ behavior: "smooth", block: "center" });
+  video.play().catch(() => {});
+}
+
+function eventItems(run, events) {
+  return events.map((e) => ({
+    ...e,
+    cropUrl: e.snapshot ? api.urls.snapshot(run.meta.id, e.snapshot) : null,
+    frameUrl: e.frame_image ? api.urls.frame(run.meta.id, e.frame_image) : null,
+  }));
+}
+
+function peopleCard(run, s, video) {
+  if (!s.tracked) {
+    return h("section", { class: "card card-pad" },
+      h("div", { class: "card-head" }, h("h2", {}, "People")),
+      h("p", { class: "hint" }, "This run was made before person tracking was added. Run the video again to see each worker's ID and status."));
+  }
+  let filter = "all";
+  const grid = h("div", { class: "people" });
+  const filters = h("div", { class: "filters", role: "group", "aria-label": "Filter people" });
+  // flagged: missing an item in most of their checks; some: flagged in a minority of checks; ok: never.
+  const state = (p) => (!p.ok ? "bad" : p.violation_checks ? "some" : "ok");
+  const count = (k) => s.people.filter((p) => state(p) === k).length;
+
+  function open(p) {
+    const events = s.events.filter((e) => e.track_id === p.id);
+    const items = events.length ? eventItems(run, events) : [{
+      track_id: p.id, time_sec: p.first_seen_sec, violations: [],
+      cropUrl: p.photo ? api.urls.person(run.meta.id, p.photo) : null, frameUrl: null,
+    }];
+    openLightbox(items, 0, { onShowInVideo: (e) => seekTo(video, e.time_sec) });
+  }
+
+  function draw() {
+    filters.replaceChildren(...[["all", `All (${s.people.length})`], ["bad", `Flagged (${count("bad")})`],
+      ["some", `Occasional (${count("some")})`], ["ok", `Always OK (${count("ok")})`]]
+      .map(([k, label]) => h("button", { type: "button", "aria-pressed": String(filter === k),
+        onclick: () => { filter = k; draw(); } }, label)));
+    const order = { bad: 0, some: 1, ok: 2 };
+    const list = s.people.filter((p) => filter === "all" || state(p) === filter)
+      .sort((a, b) => order[state(a)] - order[state(b)] || a.id - b.id);
+    grid.replaceChildren(...list.map((p) => {
+      const items = p.missing.map((t) => h("div", { class: "pm-row" },
+        h("span", {}, t.label),
+        h("span", { class: "num" }, `${t.count} of ${p.checks}`),
+        h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(t.count / p.checks) * 100}%` }))));
+      const st = state(p);
+      return h("button", { class: `person is-${st}`, type: "button",
+        title: `Open images of person #${p.id}`, onclick: () => open(p) },
+        h("div", { class: "photo" },
+          p.photo ? h("img", { src: api.urls.person(run.meta.id, p.photo), alt: `Person ${p.id}`, loading: "lazy" }) : null,
+          h("span", { class: "pid" }, `#${p.id}`)),
+        h("div", { class: "body" },
+          h("span", { class: `status ${st}` }, p.ok ? "PPE OK" : p.status_label),
+          st === "some" ? h("span", { class: "occasional" },
+            `Occasional violations: ${p.violation_checks} of ${plural(p.checks, "check")}`) : null,
+          h("span", { class: "meta num" },
+            `On screen ${fmt.time(p.first_seen_sec)}–${fmt.time(p.last_seen_sec)} · ${plural(p.checks, "check")}`),
+          items.length ? h("div", { class: "pm" }, items) : h("span", { class: "meta" }, "All PPE in every check"),
+          p.latest_label !== (p.ok ? "PPE OK" : p.status_label)
+            ? h("span", { class: "meta" }, `Last check: ${p.latest_label}`) : null));
+    }));
+  }
+  draw();
+  return h("section", { class: "card card-pad" },
+    h("div", { class: "card-head" },
+      h("div", {}, h("h2", {}, "People"),
+        h("p", {}, "Each worker keeps one ID through the video. A person is flagged for an item when it was missing in more than half of their checks; fewer than that shows as occasional.")),
+      filters),
+    grid);
+}
+
 function renderDashboard(root, run, { onDeleted }) {
   const m = run.meta;
   const s = run.summary;
@@ -270,7 +337,18 @@ function renderDashboard(root, run, { onDeleted }) {
     controls: true, playsinline: true, preload: "metadata" });
   const playerMsg = h("div", { class: "player-msg", hidden: true },
     "This browser can't play the annotated video. Use the Video button above to download it.");
-  video.addEventListener("error", () => { playerMsg.hidden = false; });
+  // The first load can fail while the server is still converting an older video,
+  // so retry once before showing the message, and hide it as soon as anything plays.
+  let retried = false;
+  video.addEventListener("error", () => {
+    if (!retried) {
+      retried = true;
+      setTimeout(() => { video.src = `${api.urls.video(m.id)}?retry=1`; video.load(); }, 2500);
+      return;
+    }
+    playerMsg.hidden = false;
+  });
+  for (const ev of ["loadeddata", "canplay", "playing"]) video.addEventListener(ev, () => { playerMsg.hidden = true; });
 
   const compliance = s.compliance_rate;
   const timeShare = s.frames_analysed ? s.frames_with_violation / s.frames_analysed : null;
@@ -289,7 +367,11 @@ function renderDashboard(root, run, { onDeleted }) {
         s.violation_checks ? `across ${plural(s.frames_with_violation, "checked frame")}` : "none found", s.violation_checks ? "bad" : "good"),
       kpi("Time with a violation", timeShare == null ? "–" : h("span", {}, (timeShare * 100).toFixed(0), h("small", {}, "%")),
         `${s.frames_with_violation} of ${s.frames_analysed} checked frames`),
-      kpi("Workers on screen", String(s.peak_workers), `peak · ${s.avg_workers} on average`)),
+      s.tracked
+        ? kpi("People tracked", String(s.people.length),
+            `${s.people.filter((p) => !p.ok).length} flagged · peak ${s.peak_workers} on screen at once`,
+            s.people.some((p) => !p.ok) ? "bad" : "good")
+        : kpi("Workers on screen", String(s.peak_workers), `peak · ${s.avg_workers} on average`)),
     h("div", { class: "grid-main" },
       h("section", { class: "card player" }, video,
         playerMsg,
@@ -297,6 +379,7 @@ function renderDashboard(root, run, { onDeleted }) {
           h("span", {}, "Annotated output"),
           h("span", { class: "num" }, `${s.frames_analysed} frames checked`))),
       byTypeCard(s)),
+    peopleCard(run, s, video),
     timelineCard(s, m, video),
     eventsCard(run, s, video)));
 }

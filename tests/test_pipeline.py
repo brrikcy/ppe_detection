@@ -98,3 +98,5 @@ def test_process_video(tmp_path):
     assert report["frames_analysed"] == 3  # frames 0, 10, 20
     data = json.loads(out.with_suffix(".json").read_text())
     assert data["timeline"][0]["workers"][1]["violations"] == ["No Helmet", "No Vest"]
+    # Same two people keep the same ids across checks.
+    assert [[w["track_id"] for w in e["workers"]] for e in data["timeline"]] == [[1, 2]] * 3

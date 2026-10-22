@@ -23,7 +23,7 @@ from ppe.video import process_video
 
 from ..schemas.runs import Progress, RunStatus
 from .run_store import RunStore, replace_with_retry
-from .summary import frame_name, snapshot_name
+from .summary import frame_name, person_photo_name, snapshot_name
 
 log = logging.getLogger(__name__)
 
@@ -86,9 +86,12 @@ class RunRunner:
                 last_save = now
                 self.store.update(run_id, progress=progress)
 
+        best_area: dict[int, int] = {}
+
         def on_analysed(entry: dict, frame, results: list[WorkerResult]) -> None:
             progress.frames_analysed += 1
             try:
+                self._save_people(paths.people, frame, results, best_area)
                 self._save_snapshots(paths.snapshots, entry["frame"], frame, results)
                 self._save_preview(paths.preview, frame, results,
                                    violation_copy=paths.frames / frame_name(entry["frame"]))
@@ -132,6 +135,27 @@ class RunRunner:
             violation_copy.parent.mkdir(exist_ok=True)
             cv2.imwrite(str(violation_copy), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
         replace_with_retry(tmp, path)
+
+    @staticmethod
+    def _save_people(folder, frame, results: list[WorkerResult], best_area: dict[int, int]) -> None:
+        """Keep the largest view of each tracked person as their photo."""
+        h, w = frame.shape[:2]
+        for r in results:
+            if r.track_id is None:
+                continue
+            x1, y1, x2, y2 = r.box
+            area = (x2 - x1) * (y2 - y1)
+            if area <= best_area.get(r.track_id, 0):
+                continue
+            best_area[r.track_id] = area
+            crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+            if crop.size == 0:
+                continue
+            ch, cw = crop.shape[:2]
+            if ch > SNAPSHOT_MAX_HEIGHT:
+                crop = cv2.resize(crop, (max(1, int(cw * SNAPSHOT_MAX_HEIGHT / ch)), SNAPSHOT_MAX_HEIGHT))
+            folder.mkdir(exist_ok=True)
+            cv2.imwrite(str(folder / person_photo_name(r.track_id)), crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
     @staticmethod
     def _save_snapshots(folder, frame_idx: int, frame, results: list[WorkerResult]) -> None:

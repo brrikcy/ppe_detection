@@ -24,7 +24,7 @@ def draw_results(frame: np.ndarray, results: list[WorkerResult]) -> np.ndarray:
         x1, y1, x2, y2 = r.box
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, line_w)
 
-        text = r.label
+        text = f"#{r.track_id} {r.label}" if r.track_id is not None else r.label
         (tw, th), base = cv2.getTextSize(text, FONT, scale, thickness)
         pad = 4
         # Put the tag above the box; drop it inside if there's no room.

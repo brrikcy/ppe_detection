@@ -85,6 +85,17 @@ def test_full_run_lifecycle(client, tmp_path):
     full = s["events"][0]["frame_image"]
     assert full and client.get(f"/api/runs/{run_id}/frames/{full}").status_code == 200
 
+    # Person tracking: two people, the right-hand one always missing helmet and vest.
+    assert s["tracked"] is True
+    people = {p["id"]: p for p in s["people"]}
+    assert set(people) == {1, 2}
+    assert people[1]["status_label"] == "PPE OK" and people[1]["checks"] == 3
+    assert people[2]["status_label"] == "PPE Violation (2) - No Helmet, No Vest"
+    assert s["people"][0]["id"] == 2  # violating people listed first
+    assert {e["track_id"] for e in s["events"]} == {2}
+    photo = people[2]["photo"]
+    assert photo and client.get(f"/api/runs/{run_id}/people/{photo}").status_code == 200
+
     assert client.get(f"/api/runs/{run_id}/video").headers["content-type"] == "video/mp4"
     assert client.get(f"/api/runs/{run_id}/report").json()["frames_analysed"] == 3
     assert client.get(f"/api/runs/{run_id}/preview").status_code == 200

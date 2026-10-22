@@ -16,6 +16,7 @@ from .analyzer import PPEAnalyzer, WorkerResult
 from .annotate import draw_results
 from .media import encode_for_browser
 from .moondream_client import AuthError
+from .tracking import PersonTracker
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ def process_video(
     writer = cv2.VideoWriter(str(raw_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
 
     current: list[WorkerResult] = []
+    tracker = PersonTracker()
     timeline = []
     failures = 0
     idx = 0
@@ -65,10 +67,13 @@ def process_video(
             ok, frame = cap.read()
             if not ok:
                 break
+            tracker.propagate(frame)
             if idx % step == 0:
                 rgb = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 try:
                     current = analyzer.analyze(rgb)
+                    for r, tid in zip(current, tracker.update(frame, [r.box for r in current])):
+                        r.track_id = tid
                 except AuthError:
                     raise
                 except Exception:
@@ -77,7 +82,8 @@ def process_video(
                 entry = {
                     "frame": idx,
                     "time_sec": round(idx / fps, 2),
-                    "workers": [{"box": r.box, "label": r.label, "violations": r.violations, "unverified": r.unverified}
+                    "workers": [{"track_id": r.track_id, "box": r.box, "label": r.label,
+                                 "violations": r.violations, "unverified": r.unverified}
                                 for r in current],
                 }
                 timeline.append(entry)
@@ -86,6 +92,10 @@ def process_video(
                 n_bad = sum(not r.ok for r in current)
                 log.info("frame %d (%.1fs): %d workers, %d with violations",
                          idx, idx / fps, len(current), n_bad)
+            else:
+                # Between checks, boxes follow their worker.
+                for r in current:
+                    r.box = tracker.box_of(r.track_id) or r.box
             writer.write(draw_results(frame, current))
             idx += 1
             if on_progress and (idx % 10 == 0 or idx == total):

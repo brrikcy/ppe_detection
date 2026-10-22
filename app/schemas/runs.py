@@ -75,8 +75,24 @@ class ViolationEvent(BaseModel):
     frame: int
     violations: list[str]
     box: list[int]
+    track_id: int | None = None  # person id; None for runs made before tracking existed
     snapshot: str | None  # crop of the worker, file name under /snapshots/
     frame_image: str | None = None  # whole annotated frame, file name under /frames/
+
+
+class PersonSummary(BaseModel):
+    """One tracked worker across the whole video."""
+
+    id: int
+    first_seen_sec: float
+    last_seen_sec: float
+    checks: int  # checked frames this person was detected in
+    violation_checks: int  # of those, how many had any violation
+    ok: bool  # overall status (majority rule per item, see summary.build_people)
+    status_label: str  # "PPE OK" or "PPE Violation (n) - No X, No Y"
+    missing: list[TypeCount]  # per violation label: checks it was flagged in
+    latest_label: str  # status at their last check
+    photo: str | None  # file name under /people/
 
 
 class RunSummary(BaseModel):
@@ -92,6 +108,8 @@ class RunSummary(BaseModel):
     unverified: list[TypeCount]
     timeline: list[TimelinePoint]
     events: list[ViolationEvent]
+    tracked: bool = False  # run has person ids
+    people: list[PersonSummary] = Field(default_factory=list)
 
 
 class RunListItem(BaseModel):

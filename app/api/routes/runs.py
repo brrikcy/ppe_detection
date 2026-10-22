@@ -145,23 +145,27 @@ def list_runs(store: Store) -> list[RunListItem]:
         item = RunListItem(id=meta.id, name=meta.name, created_at=meta.created_at,
                            status=meta.status, progress_fraction=_progress_fraction(meta))
         if meta.status == RunStatus.completed and (report := store.read_report(meta.id)):
-            s = build_summary(report["timeline"], available_snapshots=set(), available_frames=set())
+            s = build_summary(report["timeline"], available_snapshots=set(), available_frames=set(),
+                              available_photos=set())
             item.violation_checks, item.worker_checks = s.violation_checks, s.worker_checks
         items.append(item)
     return items
 
 
 @router.get("/{run_id}", response_model=RunDetail)
-def get_run(run_id: str, store: Store, runner: Runner) -> RunDetail:
+def get_run(run_id: str, store: Store, runner: Runner,
+            converter: Annotated[VideoConverter, Depends(get_video_converter)]) -> RunDetail:
     meta = _get_meta(store, run_id)
     paths = store.paths(run_id)
     timeline = None
     if meta.status == RunStatus.completed:
+        converter.warm(paths.output, audio_source=paths.input(), max_seconds=meta.options.max_seconds)
         report = store.read_report(run_id)
         timeline = report["timeline"] if report else None
     elif meta.status == RunStatus.running:
         timeline = runner.live_timeline(run_id)
-    summary = (build_summary(timeline, _image_names(paths.snapshots), _image_names(paths.frames))
+    summary = (build_summary(timeline, _image_names(paths.snapshots), _image_names(paths.frames),
+                             _image_names(paths.people))
                if timeline is not None else None)
     return RunDetail(meta=meta, progress_fraction=_progress_fraction(meta), summary=summary)
 
@@ -220,3 +224,8 @@ def get_snapshot(run_id: str, name: str, store: Store) -> FileResponse:
 @router.get("/{run_id}/frames/{name}")
 def get_frame(run_id: str, name: str, store: Store) -> FileResponse:
     return _image(store, run_id, "frames", name)
+
+
+@router.get("/{run_id}/people/{name}")
+def get_person_photo(run_id: str, name: str, store: Store) -> FileResponse:
+    return _image(store, run_id, "people", name)

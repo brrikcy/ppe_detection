@@ -26,6 +26,13 @@ class VideoConverter:
         with self._guard:
             return self._locks.setdefault(path, threading.Lock())
 
+    def warm(self, path: Path, audio_source: Path | None = None, max_seconds: float | None = None) -> None:
+        """Convert in the background (if needed) so the video is ready when the player asks."""
+        if path.exists() and self._ok.get(path) == path.stat().st_mtime:
+            return
+        threading.Thread(target=self.ensure_playable, args=(path, audio_source, max_seconds),
+                         daemon=True, name="video-convert").start()
+
     def ensure_playable(self, path: Path, audio_source: Path | None = None,
                         max_seconds: float | None = None) -> bool:
         """Returns True if `path` is (now) browser-playable."""

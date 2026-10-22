@@ -21,6 +21,7 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
   const img = h("img", { class: "lb-img", alt: "" });
   const empty = h("div", { class: "lb-empty", hidden: true }, "No image saved for this view.");
   const counter = h("span", { class: "lb-counter num" });
+  const person = h("span", { class: "lb-person" });
   const time = h("span", { class: "lb-time num" });
   const tags = h("div", { class: "tags" });
   const modeBtns = {
@@ -37,7 +38,7 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
 
   const root = h("div", { class: "lightbox", role: "dialog", "aria-modal": "true", "aria-label": "Violation images" },
     h("div", { class: "lb-top" },
-      h("div", { class: "lb-title" }, counter, time, tags),
+      h("div", { class: "lb-title" }, person, counter, time, tags),
       closeBtn),
     h("div", { class: "lb-stage", onclick: (e) => { if (e.target.classList.contains("lb-stage")) close(); } },
       prev, img, empty, next),
@@ -56,8 +57,12 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
     const m = urlFor(it, mode) ? mode : (mode === "frame" ? "crop" : "frame");
     const url = urlFor(it, m);
     counter.textContent = `${index + 1} / ${items.length}`;
+    person.textContent = it.track_id != null ? `Person #${it.track_id}` : "";
+    person.hidden = it.track_id == null;
     time.textContent = fmt.timePrecise(it.time_sec);
-    tags.replaceChildren(...it.violations.map((v) => h("span", { class: "tag-bad" }, v)));
+    tags.replaceChildren(...(it.violations.length
+      ? it.violations.map((v) => h("span", { class: "tag-bad" }, v))
+      : [h("span", { class: "tag-ok" }, "PPE OK")]));
     for (const [k, b] of Object.entries(modeBtns)) {
       b.setAttribute("aria-pressed", String(k === m));
       b.disabled = !urlFor(it, k);

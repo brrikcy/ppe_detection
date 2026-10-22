@@ -6,7 +6,7 @@ from collections import Counter
 
 from ppe.config import PPE_CATALOG
 
-from ..schemas.runs import RunSummary, TimelinePoint, TypeCount, ViolationEvent
+from ..schemas.runs import PersonSummary, RunSummary, TimelinePoint, TypeCount, ViolationEvent
 
 
 def snapshot_name(frame: int, worker_index: int) -> str:
@@ -17,8 +17,57 @@ def frame_name(frame: int) -> str:
     return f"{frame:06d}.jpg"
 
 
+def person_photo_name(track_id: int) -> str:
+    return f"{track_id}.jpg"
+
+
+def status_label(violations: list[str]) -> str:
+    return "PPE OK" if not violations else f"PPE Violation ({len(violations)}) - {', '.join(violations)}"
+
+
+def build_people(timeline: list[dict], available_photos: set[str] | None = None) -> list[PersonSummary]:
+    """Aggregate each tracked person's checks.
+
+    A person's overall status flags an item only when it was missing in more than
+    half of their checks, so a single misread frame doesn't mark them as violating.
+    """
+    people: dict[int, dict] = {}
+    for entry in timeline:
+        for w in entry["workers"]:
+            tid = w.get("track_id")
+            if tid is None:
+                continue
+            p = people.setdefault(tid, {"first": entry["time_sec"], "checks": 0, "bad": 0,
+                                        "missing": Counter(), "latest": []})
+            p["last"] = entry["time_sec"]
+            p["checks"] += 1
+            p["bad"] += bool(w["violations"])
+            p["missing"].update(w["violations"])
+            p["latest"] = w["violations"]
+
+    out = []
+    for tid, p in sorted(people.items()):
+        overall = [label for label, n in p["missing"].most_common() if n > p["checks"] / 2]
+        photo = person_photo_name(tid)
+        out.append(PersonSummary(
+            id=tid,
+            first_seen_sec=p["first"],
+            last_seen_sec=p["last"],
+            checks=p["checks"],
+            violation_checks=p["bad"],
+            ok=not overall,
+            status_label=status_label(overall),
+            missing=[TypeCount(label=k, count=v) for k, v in p["missing"].most_common()],
+            latest_label=status_label(p["latest"]),
+            photo=photo if available_photos is None or photo in available_photos else None,
+        ))
+    # Violating people first, then by id.
+    return sorted(out, key=lambda x: (x.ok, x.id))
+
+
 def build_summary(timeline: list[dict], available_snapshots: set[str] | None = None,
-                  available_frames: set[str] | None = None) -> RunSummary:
+                  available_frames: set[str] | None = None,
+                  available_photos: set[str] | None = None) -> RunSummary:
     """available_* limit image references to files that exist (None = assume all exist)."""
     by_type: Counter[str] = Counter()
     unverified: Counter[str] = Counter()
@@ -39,6 +88,7 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
             events.append(ViolationEvent(
                 time_sec=entry["time_sec"],
                 frame=entry["frame"],
+                track_id=w.get("track_id"),
                 violations=w["violations"],
                 box=list(w["box"]),
                 snapshot=snap if available_snapshots is None or snap in available_snapshots else None,
@@ -65,4 +115,6 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
         unverified=[TypeCount(label=k, count=v) for k, v in unverified.most_common()],
         timeline=points,
         events=events,
+        tracked=any(w.get("track_id") is not None for e in timeline for w in e["workers"]),
+        people=build_people(timeline, available_photos),
     )

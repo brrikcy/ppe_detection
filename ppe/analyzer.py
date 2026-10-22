@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from PIL import Image
 
 from .config import PPE_CATALOG, Config
+from .moondream_client import AuthError
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +47,8 @@ def _with_retries(fn, *args, attempts: int = 6, **kwargs):
     for i in range(attempts):
         try:
             return fn(*args, **kwargs)
+        except AuthError:
+            raise  # retrying won't fix a bad key
         except Exception as exc:  # SDK raises generic exceptions for HTTP errors
             if i == attempts - 1:
                 raise

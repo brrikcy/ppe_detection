@@ -27,7 +27,7 @@ PPE_CATALOG: dict[str, PPEItem] = {
 }
 
 
-def _parse_required(value: str | None) -> list[str]:
+def parse_required(value: str | None) -> list[str]:
     items = [v.strip().lower() for v in (value or "helmet,vest").split(",") if v.strip()]
     unknown = [i for i in items if i not in PPE_CATALOG]
     if unknown:
@@ -56,7 +56,7 @@ class Config:
             )
         cfg = cls(
             api_key=api_key,
-            required_ppe=_parse_required(os.getenv("REQUIRED_PPE")),
+            required_ppe=parse_required(os.getenv("REQUIRED_PPE")),
             analysis_interval_sec=float(os.getenv("ANALYSIS_INTERVAL_SEC", "1.0")),
             max_workers=int(os.getenv("MAX_WORKERS", "4")),
         )
@@ -64,6 +64,6 @@ class Config:
             if v is None:
                 continue
             if k == "required_ppe" and isinstance(v, str):
-                v = _parse_required(v)
+                v = parse_required(v)
             setattr(cfg, k, v)
         return cfg

@@ -25,7 +25,57 @@ pip install -r requirements.txt
 cp .env.example .env   # then put your key in MOONDREAM_API_KEY
 ```
 
-## Usage
+## Web app
+
+```bash
+python run.py          # opens http://127.0.0.1:8000
+```
+
+1. Optionally enter a Moondream API key. If you leave it empty, the server uses `MOONDREAM_API_KEY` from `.env`. **Test key** checks it with one call. Keys are never written to disk.
+2. Drop in a video, choose the required PPE and the check interval, then click **Run inference**.
+3. While the run is processing, you see live progress and the latest checked frame. When it finishes, the dashboard shows:
+   - compliance, violation and worker-count figures
+   - the annotated video
+   - violations by type, and items it couldn't verify
+   - a compliance timeline; click a column to jump the video there
+   - a snapshot card for every flagged worker
+4. Every run is saved under `runs/<id>/` and listed in the sidebar, so you can switch between runs or delete them.
+
+Runs execute one at a time; any others wait as *queued*. The annotated video is H.264, which plays in Chrome, Edge, Safari and Firefox.
+
+### API
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/config` | PPE items, defaults, whether the server has a key |
+| POST | `/api/key/check` | Verify a key (form field `api_key`, falls back to the server key) |
+| POST | `/api/runs` | Multipart: `video`, `api_key?`, `required_ppe`, `analysis_interval_sec`, `max_seconds?` |
+| GET | `/api/runs` | All runs, newest first |
+| GET | `/api/runs/{id}` | Status, progress and dashboard summary (partial while running) |
+| GET | `/api/runs/{id}/video` · `/report` · `/preview` · `/snapshots/{name}` | Media |
+| DELETE | `/api/runs/{id}` | Delete a finished run |
+
+Interactive docs: http://127.0.0.1:8000/docs
+
+### Code layout
+
+```
+app/
+  main.py               create_app(): wires settings, services, routers, static files
+  core/settings.py      server settings from env/.env
+  schemas/runs.py       Pydantic request/response models
+  services/
+    run_store.py        filesystem persistence of runs (meta.json never holds the key)
+    runner.py           background execution, progress, preview and snapshots
+    summary.py          dashboard metrics from the per-frame timeline
+    keys.py             form key -> server key fallback, key check
+  api/deps.py           dependency providers
+  api/routes/           config.py, runs.py
+  static/               index.html, styles.css, js/ (api, ui, charts, views/)
+ppe/                    detection pipeline (shared with the CLI)
+```
+
+## Command line
 
 ```bash
 python annotate_video.py site.mp4                       # -> outputs/site_annotated.mp4 + .json

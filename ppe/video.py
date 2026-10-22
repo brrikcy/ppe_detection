@@ -8,12 +8,14 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 import cv2
 from PIL import Image
 
 from .analyzer import PPEAnalyzer, WorkerResult
 from .annotate import draw_results
+from .moondream_client import AuthError
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +25,14 @@ def process_video(
     output_path: str | Path,
     analyzer: PPEAnalyzer,
     max_seconds: float | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    on_analysed: Callable[[dict, "cv2.typing.MatLike", list[WorkerResult]], None] | None = None,
 ) -> dict:
+    """Annotate `input_path` into `output_path` and return the report dict.
+
+    on_progress(frames_done, total_frames) is called periodically while frames are written.
+    on_analysed(timeline_entry, frame_bgr, results) is called after each analysed frame.
+    """
     input_path, output_path = Path(input_path), Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -47,6 +56,7 @@ def process_video(
 
     current: list[WorkerResult] = []
     timeline = []
+    failures = 0
     idx = 0
     try:
         while True:
@@ -59,22 +69,34 @@ def process_video(
                 rgb = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 try:
                     current = analyzer.analyze(rgb)
+                except AuthError:
+                    raise
                 except Exception:
+                    failures += 1
                     log.exception("Analysis failed at frame %d; keeping previous results", idx)
-                timeline.append({
+                entry = {
                     "frame": idx,
                     "time_sec": round(idx / fps, 2),
                     "workers": [{"box": r.box, "label": r.label, "violations": r.violations, "unverified": r.unverified}
                                 for r in current],
-                })
+                }
+                timeline.append(entry)
+                if on_analysed:
+                    on_analysed(entry, frame, current)
                 n_bad = sum(not r.ok for r in current)
                 log.info("frame %d (%.1fs): %d workers, %d with violations",
                          idx, idx / fps, len(current), n_bad)
             writer.write(draw_results(frame, current))
             idx += 1
+            if on_progress and (idx % 10 == 0 or idx == total):
+                on_progress(idx, total)
     finally:
         cap.release()
         writer.release()
+
+    if timeline and failures == len(timeline):
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise RuntimeError("Moondream analysis failed on every checked frame; see the server log")
 
     _finalize(raw_path, input_path, output_path, max_seconds)
     shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -83,6 +105,10 @@ def process_video(
         "input": str(input_path),
         "output": str(output_path),
         "fps": fps,
+        "width": width,
+        "height": height,
+        "duration_sec": round(idx / fps, 2),
+        "analysis_interval_sec": analyzer.config.analysis_interval_sec,
         "frames_written": idx,
         "frames_analysed": len(timeline),
         "required_ppe": analyzer.config.required_ppe,

@@ -15,6 +15,10 @@ from PIL import Image
 DEFAULT_ENDPOINT = "https://api.moondream.ai/v1"
 
 
+class AuthError(RuntimeError):
+    """The API key was missing or rejected (HTTP 401/403)."""
+
+
 class MoondreamCloud:
     def __init__(self, api_key: str, endpoint: str = DEFAULT_ENDPOINT, timeout: float = 60):
         self.endpoint = endpoint.rstrip("/")
@@ -33,6 +37,8 @@ class MoondreamCloud:
 
     def _post(self, path: str, payload: dict) -> dict:
         r = self.session.post(f"{self.endpoint}/{path}", json=payload, timeout=self.timeout)
+        if r.status_code in (401, 403):
+            raise AuthError(f"Moondream rejected the API key (HTTP {r.status_code})")
         if r.status_code >= 400:
             raise RuntimeError(f"Moondream /{path} HTTP {r.status_code}: {r.text[:300]}")
         return r.json()

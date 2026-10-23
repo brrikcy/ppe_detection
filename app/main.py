@@ -26,7 +26,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 def create_app(settings: Settings | None = None,
                analyzer_factory: AnalyzerFactory = default_analyzer_factory,
-               key_verifier: KeyVerifier = verify_key,
+               key_verifier: KeyVerifier | None = None,
                people_factory: PeopleFactory | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
 
@@ -40,11 +40,14 @@ def create_app(settings: Settings | None = None,
     store = RunStore(settings.data_dir)
     app.state.settings = settings
     app.state.store = store
-    app.state.verify_key = key_verifier
     app.state.video_converter = VideoConverter()
-    app.state.dev_settings = DevSettingsStore(settings.data_dir)
+    app.state.dev_settings = dev = DevSettingsStore(settings.data_dir)
+    # By default the key is checked against the endpoint and model that runs will use.
+    app.state.verify_key = key_verifier or (
+        lambda key: verify_key(key, settings.moondream_endpoint, dev.get().moondream_model))
     app.state.runner = RunRunner(store, analyzer_factory, people_factory=people_factory,
-                                 person_model=settings.person_model)
+                                 person_model=settings.person_model,
+                                 moondream_endpoint=settings.moondream_endpoint)
 
     app.include_router(config_routes.router)
     app.include_router(runs_routes.router)

@@ -30,8 +30,11 @@ const SECTIONS = [
   },
   {
     title: "Moondream requests",
-    intro: "Speed versus rate limits.",
+    intro: "Which model answers, and speed versus rate limits.",
+    endpointNote: true,
     fields: [
+      { key: "moondream_model", type: "text", label: "Moondream model", list: "md-models",
+        hint: "Sent with every request so results don't change when the server's default does. Moondream Cloud accepts moondream3.1-9B-A2B and moondream3-preview." },
       { key: "parallel_requests", type: "number", label: "Parallel requests", min: 1, max: 16, step: 1,
         hint: "Higher is faster but hits Moondream's rate limit (HTTP 429) sooner." },
       { key: "retry_attempts", type: "number", label: "Attempts per call", min: 1, max: 8, step: 1,
@@ -123,7 +126,7 @@ export async function renderDev(root) {
 
   // ---- generic field --------------------------------------------------------
   // get/set read and write the draft; def() returns the default value.
-  function field({ id, label, hint, unit, type, options, min, max, step, numeric }, get, set, def) {
+  function field({ id, label, hint, unit, type, options, min, max, step, numeric, list }, get, set, def) {
     const dot = h("span", { class: "changed-dot", title: "Changed from the default" });
     const reset = h("button", { type: "button", class: "link-btn", onclick: () => { set(clone(def())); refreshBar(); } }, "Reset");
     let input;
@@ -138,7 +141,8 @@ export async function renderDev(root) {
     } else if (type === "textarea") {
       input = h("textarea", { id, class: "input textarea", rows: 3, oninput: () => { set(input.value); refreshBar(); } });
     } else if (type === "text") {
-      input = h("input", { id, class: "input", type: "text", oninput: () => { set(input.value); refreshBar(); } });
+      input = h("input", { id, class: "input", type: "text", list, autocomplete: "off", spellcheck: "false",
+        oninput: () => { set(input.value); refreshBar(); } });
     } else {
       input = h("input", { id, class: "input num-input", type: "number", min, max, step,
         oninput: () => { if (input.value !== "") { set(Number(input.value)); refreshBar(); } } });
@@ -202,6 +206,11 @@ export async function renderDev(root) {
 
   const sectionCards = SECTIONS.map((sec) => h("section", { class: "card card-pad" },
     h("div", { class: "card-head" }, h("div", {}, h("h2", {}, sec.title), h("p", {}, sec.intro))),
+    sec.endpointNote ? h("p", { class: "endpoint-note" },
+      "Endpoint: ", h("code", {}, state.moondream_endpoint),
+      h("span", { class: "hint" }, " · set MOONDREAM_ENDPOINT in the server's .env to use another provider or a self-hosted server")) : null,
+    sec.endpointNote ? h("datalist", { id: "md-models" },
+      ["moondream3.1-9B-A2B", "moondream3-preview"].map((m) => h("option", { value: m }))) : null,
     h("div", { class: "dev-fields" }, sec.fields.map((f) =>
       field({ ...f, id: `f-${f.key}` }, () => draft[f.key], (v) => { draft[f.key] = v; }, () => defaults[f.key])))));
 

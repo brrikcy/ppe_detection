@@ -58,6 +58,7 @@ class RunMeta(BaseModel):
     status: RunStatus = RunStatus.queued
     error: str | None = None
     key_source: KeySource
+    moondream_endpoint: str | None = None  # where this run's Moondream requests went (None: older runs)
     options: RunOptions
     video: VideoInfo
     progress: Progress = Field(default_factory=Progress)
@@ -156,6 +157,7 @@ class TuningState(BaseModel):
     changes: list[str]  # dotted names of settings that differ from the defaults
     models: list[str]  # person-detection weights available in models/
     default_model: str
+    moondream_endpoint: str  # server setting (MOONDREAM_ENDPOINT), shown read-only
 
 
 class TryRequestResult(BaseModel):

@@ -13,7 +13,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
 
 from ppe.config import PPE_CATALOG, Config
-from ppe.moondream_client import AuthError
+from ppe.moondream_client import AuthError, ModelError
 from ppe.people import DEFAULT_MODEL, MODELS_DIR
 from ppe.tuning import Tuning
 
@@ -39,6 +39,7 @@ def _state(active: Tuning, settings: Settings) -> TuningState:
         changes=active.changes(),
         models=sorted(p.name for p in MODELS_DIR.glob("*.pt")) if MODELS_DIR.exists() else [],
         default_model=Path(settings.person_model or DEFAULT_MODEL).name,
+        moondream_endpoint=settings.moondream_endpoint,
     )
 
 
@@ -115,11 +116,15 @@ async def try_prompt(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Upload an image or pick one from a run")
     img = _load_image(data)
 
-    analyzer = runner.analyzer_factory(Config(api_key=key, required_ppe=[item], tuning=tun))
+    analyzer = runner.analyzer_factory(Config(api_key=key, required_ppe=[item], tuning=tun,
+                                              moondream_endpoint=settings.moondream_endpoint))
     try:
         result = await run_in_threadpool(analyzer.explain_item, img, item)
     except AuthError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Moondream rejected the API key.")
+    except ModelError:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            f"The Moondream endpoint doesn't accept model {tun.moondream_model!r}.")
     except Exception as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Moondream call failed: {exc}")
     finally:

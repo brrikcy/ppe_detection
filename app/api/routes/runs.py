@@ -19,7 +19,7 @@ from ...schemas.runs import (
     KeySource, RunDetail, RunListItem, RunMeta, RunOptions, RunStatus, VideoInfo,
 )
 from ...services.keys import (
-    KeyRejected, KeyVerifier, MissingKey, MoondreamUnreachable, resolve_key,
+    KeyRejected, KeyVerifier, MissingKey, ModelRejected, MoondreamUnreachable, resolve_key,
 )
 from ...services.run_store import RunNotFound, RunStore
 from ...services.runner import RunRunner
@@ -110,6 +110,8 @@ async def create_run(
     except KeyRejected as exc:
         hint = " It came from the server's .env." if key_source == KeySource.server else ""
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"{exc}{hint} Fix the key and try again.")
+    except ModelRejected as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
     except MoondreamUnreachable as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
 
@@ -130,6 +132,7 @@ async def create_run(
 
     meta = RunMeta(
         id=run_id,
+        moondream_endpoint=settings.moondream_endpoint,
         name=Path(video.filename or "video").stem[:120],
         created_at=datetime.now(timezone.utc),
         key_source=key_source,

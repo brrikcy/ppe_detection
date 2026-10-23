@@ -13,7 +13,7 @@ from PIL import Image
 from .analyzer import PPEAnalyzer, WorkerResult
 from .annotate import draw_results
 from .media import FrameWriter
-from .moondream_client import AuthError
+from .moondream_client import AuthError, ModelError
 from .status import PersonStatus
 
 log = logging.getLogger(__name__)
@@ -101,8 +101,8 @@ def process_video(
                 rgb = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 try:
                     checked = analyzer.check_workers(rgb, [p.box for p in due], [p.box for p in tracked])
-                except AuthError:
-                    raise
+                except (AuthError, ModelError):
+                    raise  # every later check would fail the same way
                 except Exception:
                     failures += 1
                     failed = True
@@ -165,6 +165,7 @@ def process_video(
         "frames_analysed": sum(not e["arrival"] for e in timeline),  # regular checks
         "arrival_checks": sum(e["arrival"] for e in timeline),
         "required_ppe": cfg.required_ppe,
+        "moondream_endpoint": cfg.moondream_endpoint,
         "tuning": tun.model_dump(),
         "timeline": timeline,
     }

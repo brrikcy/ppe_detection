@@ -5,9 +5,12 @@ each run keeps a copy of the settings it used.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from .moondream_client import DEFAULT_MODEL
 
 DEFAULT_QUESTION_TEMPLATE = (
     "Focus on the main person in the centre of this image. "
@@ -81,6 +84,8 @@ class Tuning(BaseModel):
     person_flag_ratio: float = Field(0.5, ge=0.05, lt=1.0)  # flagged when missing in > this share
 
     # --- Moondream requests -----------------------------------------------------
+    # Model ID sent with every request, so results don't change when the server's default does.
+    moondream_model: str = Field(DEFAULT_MODEL, min_length=1, max_length=120)
     parallel_requests: int = Field(4, ge=1, le=16)
     retry_attempts: int = Field(6, ge=1, le=8)  # per call; waits 1, 2, 4 ... s between tries
 
@@ -108,6 +113,14 @@ class Tuning(BaseModel):
         if unknown:
             raise ValueError(f"unknown PPE item(s): {', '.join(sorted(unknown))}")
         return {k: v.get(k, DEFAULT_ITEMS[k].model_dump()) for k in DEFAULT_ITEMS}
+
+    @field_validator("moondream_model")
+    @classmethod
+    def _model_id(cls, v: str) -> str:
+        v = v.strip()
+        if not re.fullmatch(r"[A-Za-z0-9._\-/@:]+", v):
+            raise ValueError("must be a model ID like moondream3.1-9B-A2B (no spaces)")
+        return v
 
     @field_validator("detector_imgsz")
     @classmethod

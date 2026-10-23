@@ -368,3 +368,5 @@ select.input { font-family: var(--body); }
 .pg-steps code { font: 12.5px var(--mono); background: var(--surface-2); padding: 1px 5px; border-radius: 3px; }
 @media (max-width: 1100px) { .pg-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 560px) { .pg-result { grid-template-columns: minmax(0, 1fr); } }
+.endpoint-note { margin: -4px 0 16px; font-size: 13px; overflow-wrap: anywhere; }
+.endpoint-note code { font: 12.5px var(--mono); background: var(--surface-2); padding: 1px 6px; border-radius: 3px; }

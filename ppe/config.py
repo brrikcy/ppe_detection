@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
+from .moondream_client import DEFAULT_ENDPOINT
 from .tuning import Tuning
 
 
@@ -27,6 +28,14 @@ PPE_CATALOG: dict[str, PPEItem] = {
 }
 
 
+def endpoint_from_env() -> str:
+    """MOONDREAM_ENDPOINT, or Moondream Cloud. Must be an http(s) base URL like https://host/v1."""
+    url = (os.getenv("MOONDREAM_ENDPOINT") or DEFAULT_ENDPOINT).strip().rstrip("/")
+    if not url.startswith(("https://", "http://")):
+        raise ValueError(f"MOONDREAM_ENDPOINT must start with https:// or http://, got {url!r}")
+    return url
+
+
 def parse_required(value: str | None) -> list[str]:
     items = [v.strip().lower() for v in (value or "helmet,vest").split(",") if v.strip()]
     unknown = [i for i in items if i not in PPE_CATALOG]
@@ -43,7 +52,8 @@ class Config:
     required_ppe: list[str] = field(default_factory=lambda: ["helmet", "vest"])
     analysis_interval_sec: float = 1.0
     person_model: str | None = None  # server default YOLO weights; None = models/yolo11n.pt
-    tuning: Tuning = field(default_factory=Tuning)  # prompts, decision rules, tracker settings
+    tuning: Tuning = field(default_factory=Tuning)  # prompts, decision rules, model, tracker settings
+    moondream_endpoint: str = DEFAULT_ENDPOINT  # Moondream API base URL (MOONDREAM_ENDPOINT)
 
     @classmethod
     def from_env(cls, tuning: Tuning | None = None, **overrides) -> "Config":
@@ -63,6 +73,7 @@ class Config:
             analysis_interval_sec=float(os.getenv("ANALYSIS_INTERVAL_SEC", "1.0")),
             person_model=os.getenv("PERSON_MODEL") or None,
             tuning=tuning,
+            moondream_endpoint=endpoint_from_env(),
         )
         for k, v in overrides.items():
             if v is None:

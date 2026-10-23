@@ -8,6 +8,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from ppe.config import endpoint_from_env
+from ppe.moondream_client import DEFAULT_ENDPOINT
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -17,6 +20,7 @@ class Settings:
     server_api_key: str | None  # fallback when the form leaves the key empty
     max_upload_mb: int = 1024
     person_model: Path | None = None  # YOLO weights for person tracking; None = models/yolo11n.pt
+    moondream_endpoint: str = DEFAULT_ENDPOINT  # where Moondream requests (and the API key) are sent
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -27,4 +31,5 @@ class Settings:
             max_upload_mb=int(os.getenv("MAX_UPLOAD_MB", "1024")),
             person_model=(PROJECT_ROOT / os.environ["PERSON_MODEL"]).resolve()
             if os.getenv("PERSON_MODEL") else None,
+            moondream_endpoint=endpoint_from_env(),
         )

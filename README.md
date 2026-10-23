@@ -48,6 +48,7 @@ If `opencv-python-headless` is already installed, Ultralytics' `opencv-python` d
 | Variable | Default | Used by | Purpose |
 |---|---|---|---|
 | `MOONDREAM_API_KEY` | — | both | Moondream key. In the web app it's the fallback when the form field is empty. |
+| `MOONDREAM_ENDPOINT` | `https://api.moondream.ai/v1` | both | Base URL of the Moondream API: Moondream Cloud, another provider with the same API, or a self-hosted server. The API key is sent here. |
 | `PERSON_MODEL` | `models/yolo11n.pt` | both | YOLO weights for person tracking (run from the project folder). |
 | `MAX_WORKERS` | `4` | command line | Parallel Moondream requests. In the web app this is a developer option. |
 | `REQUIRED_PPE` | `helmet,vest` | command line | PPE items to check. The web app takes them from the form. |
@@ -87,7 +88,7 @@ python run.py --port 8080 --no-browser
   - whether "no" answers are double-checked with detect, and whether a hidden body part makes an item unverified
   - crop padding and the minimum worker height to check
   - the video vote window, and the share of checks that flags a person in the People section
-- **Moondream requests**: parallel requests and attempts per call.
+- **Moondream requests**: the Moondream model (default `moondream3.1-9B-A2B`, sent with every request so results don't change when the server's default does), parallel requests and attempts per call. The endpoint is shown here read-only; change it with `MOONDREAM_ENDPOINT`.
 - **Person tracking**: detection model (any `.pt` file in `models/`), input size, detection confidence, the confidence needed to start a new person, the minimum track age, and how long a hidden worker keeps their ID.
 - **Prompt playground**: pick a worker image from any completed run (or upload one), choose an item and run one check with the settings on the page, saved or not. It shows the exact question, Moondream's raw answer, each detect step, the boxes detect found on the image (green: on this worker, dashed: outside the item's region), and the verdict. It uses 1–3 Moondream calls and saves nothing.
 
@@ -179,11 +180,18 @@ python annotate_video.py site.mp4 --required helmet,vest,gloves
 python annotate_video.py site.mp4 --max-seconds 10      # quick trial on the first 10s
 python annotate_video.py site.mp4 -o out.mp4 --workers 2 -v
 python annotate_video.py site.mp4 --tuning runs/_dev/tuning.json   # use the web app's developer settings
+python annotate_video.py site.mp4 --model moondream3-preview      # another Moondream model
 ```
 
 Supported PPE items: `helmet`, `vest`, `gloves`, `boots`, `goggles`, `mask` (default: `helmet,vest`).
 
 **Cost:** each check makes `workers × required_items` API calls, plus 1–2 confirmation calls for each "no" answer, plus one extra check for each worker who appears between checks. A 60s clip with 5 workers, checking helmet and vest at 1s intervals, makes about 600–700 calls.
+
+## Moondream model and endpoint
+
+Every request names its model (`moondream3.1-9B-A2B` by default; change it in Developer options or with `--model`). If the endpoint doesn't accept the model, a run is refused at the start (the key check sends one request with the same model), and a run that hits it mid-way stops with a message pointing to Developer options. Each run records the endpoint and model it used (`moondream_endpoint` and `tuning.moondream_model` in the report; the model is also shown on the run page).
+
+**Moondream Cloud is closing on 13 November 2026** ([Moondream's announcement](https://moondream.ai/blog/moondream-is-joining-prime-intellect)). To keep using Moondream after that, point `MOONDREAM_ENDPOINT` at a service with the same API, such as Prime Intellect's hosted Moondream, or a self-hosted Moondream server, and set the model ID that service uses.
 
 ## Known limitations
 

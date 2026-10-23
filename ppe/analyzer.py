@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from PIL import Image
 
 from .config import PPE_CATALOG, Config
-from .moondream_client import AuthError
+from .moondream_client import AuthError, ModelError
 
 log = logging.getLogger(__name__)
 
@@ -72,8 +72,8 @@ def _with_retries(fn, *args, attempts: int = 6, **kwargs):
     for i in range(attempts):
         try:
             return fn(*args, **kwargs)
-        except AuthError:
-            raise  # retrying won't fix a bad key
+        except (AuthError, ModelError):
+            raise  # retrying won't fix a bad key or an unknown model
         except Exception as exc:  # SDK raises generic exceptions for HTTP errors
             if i == attempts - 1:
                 raise
@@ -97,7 +97,8 @@ class PPEAnalyzer:
         if model is None:
             from .moondream_client import MoondreamCloud
 
-            model = MoondreamCloud(api_key=config.api_key)
+            model = MoondreamCloud(api_key=config.api_key, endpoint=config.moondream_endpoint,
+                                   model=config.tuning.moondream_model)
         self.model = model
         self.tuning = config.tuning
         self._pool = ThreadPoolExecutor(max_workers=self.tuning.parallel_requests)

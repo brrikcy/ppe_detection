@@ -12,7 +12,7 @@ from ppe.config import PPE_CATALOG
 from ...core.settings import Settings
 from ...schemas.runs import AppConfig, KeyCheckResult, RunOptions
 from ...services.keys import (
-    KeyRejected, KeyVerifier, MissingKey, MoondreamUnreachable, resolve_key,
+    KeyRejected, KeyVerifier, MissingKey, ModelRejected, MoondreamUnreachable, resolve_key,
 )
 from ..deps import get_key_verifier, get_settings
 
@@ -45,6 +45,6 @@ async def post_key_check(
         await run_in_threadpool(verify, key)
     except MissingKey as exc:
         return KeyCheckResult(ok=False, source=None, message=str(exc))
-    except (KeyRejected, MoondreamUnreachable) as exc:
+    except (KeyRejected, ModelRejected, MoondreamUnreachable) as exc:
         return KeyCheckResult(ok=False, source=source, message=str(exc))
     return KeyCheckResult(ok=True, source=source, message="Key works.")

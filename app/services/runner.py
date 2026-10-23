@@ -19,7 +19,7 @@ import cv2
 from ppe.analyzer import PPEAnalyzer, WorkerResult
 from ppe.annotate import draw_results
 from ppe.config import Config
-from ppe.moondream_client import AuthError
+from ppe.moondream_client import DEFAULT_ENDPOINT, AuthError, ModelError
 from ppe.video import process_video
 
 from ..schemas.runs import Progress, RunStatus
@@ -42,11 +42,13 @@ def default_analyzer_factory(config: Config) -> PPEAnalyzer:
 
 class RunRunner:
     def __init__(self, store: RunStore, analyzer_factory: AnalyzerFactory = default_analyzer_factory,
-                 people_factory: PeopleFactory | None = None, person_model: Path | None = None):
+                 people_factory: PeopleFactory | None = None, person_model: Path | None = None,
+                 moondream_endpoint: str = DEFAULT_ENDPOINT):
         self.store = store
         self.analyzer_factory = analyzer_factory
         self.people_factory = people_factory
         self.person_model = person_model
+        self.moondream_endpoint = moondream_endpoint
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="run")
         self._live: dict[str, list[dict]] = {}  # timeline so far for active runs
         self._live_lock = threading.Lock()
@@ -74,6 +76,7 @@ class RunRunner:
             analysis_interval_sec=opts.analysis_interval_sec,
             person_model=str(self.person_model) if self.person_model else None,
             tuning=opts.tuning,
+            moondream_endpoint=self.moondream_endpoint,
         )
         with self._live_lock:
             self._live[run_id] = []
@@ -119,6 +122,9 @@ class RunRunner:
                               finished_at=datetime.now(timezone.utc))
         except AuthError:
             self._fail(run_id, "Moondream rejected the API key. Check it and start a new run.")
+        except ModelError:
+            self._fail(run_id, f"The Moondream endpoint doesn't accept model {opts.tuning.moondream_model!r}. "
+                               "Change it in Developer options and start a new run.")
         except Exception as exc:
             log.exception("Run %s failed", run_id)
             self._fail(run_id, str(exc) or exc.__class__.__name__)

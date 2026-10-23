@@ -70,6 +70,8 @@ function header(run, actions = []) {
       h("span", { class: "chip" }, `Every ${m.options.analysis_interval_sec}s`),
       m.options.max_seconds ? h("span", { class: "chip" }, `First ${m.options.max_seconds}s only`) : null,
       h("span", { class: "chip" }, m.key_source === "server" ? "Server API key" : "Entered API key"),
+      m.moondream_endpoint ? h("span", { class: "chip", title: `Endpoint: ${m.moondream_endpoint}` },
+        `Model: ${m.options.tuning.moondream_model}`) : null,
       customChip(m.options.tuning)));
 }
 

@@ -85,13 +85,15 @@ python run.py --port 8080 --no-browser
 
 ### Developer options
 
-**Developer options** in the sidebar tunes detection without touching code. Saved settings apply to new runs, and each run keeps a copy of the settings it used, so results stay reproducible. Each setting shows a dot and a **Reset** link when it differs from the default.
+**Developer options** in the sidebar tunes detection without touching code. Saved settings apply to new runs, and each run keeps a copy of the settings it used, so results stay reproducible. Settings are listed with their description on the left and the control on the right, grouped by what they do; a bar that stays at the top jumps between sections and holds **Save** and **Discard changes**. Each setting shows a dot and a **Reset** link when it differs from the default.
 
-- **Moondream prompts**: the question template (`{item}` is replaced by the item's wording), the re-check question for a detected box (`{term}`), an option to ask about all items in one question per worker (fewer calls, possibly less reliable), and per item: the wording, the detect term, the body part that must be visible, the region of the worker's box where the item may be, and the plausible size of a detected box.
+- **Moondream prompts**: the question template (`{item}` is replaced by the item's wording), an option to ask about all items in one question per worker (fewer calls, possibly less reliable), and the re-check question for a detected box (`{term}`).
+- **PPE items**: one tab per item with its wording, detect term, the body part that must be visible, the region of the worker's box where the item may be, and the plausible width and height of a detected box. A dot on a tab marks an item changed from the defaults.
 - **Decision rules**:
   - what an unclear answer counts as (present, unverified or missing)
-  - whether "no" answers are double-checked with detect, whether the detected box is re-checked with Moondream, how much of it must be in the item's region, and whether a hidden body part makes an item unverified
+  - whether "no" answers are double-checked with detect, and whether a hidden body part then makes an item unverified
   - whether a "yes" is confirmed when workers overlap, and how much overlap triggers it
+  - for both double-checks: how much of a detected box must be in the item's region, and whether Moondream is re-asked about the box
   - crop padding, and the minimum worker height to check (share of the frame and pixels)
 - **Status and voting**: the vote window, how many missing checks turn a box red, how long a new person is tracked before their first check, whether newcomers wait until they're fully in frame, and how many failed checks in a row stop a run.
 

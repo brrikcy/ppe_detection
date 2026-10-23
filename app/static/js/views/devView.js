@@ -7,99 +7,149 @@ import { fmt, h } from "../ui.js";
 const ITEM_LABELS = { helmet: "Helmet", vest: "Vest", gloves: "Gloves", boots: "Boots", goggles: "Goggles", mask: "Mask" };
 
 // Settings that only matter when another one is on: return why a field is unused, or null.
+const NO_CHECK = "Double-check “no” answers with detect";
+const YES_CHECK = "Confirm “yes” when workers overlap";
 const offUnless = (key, label) => (d) => (d[key] ? null : `Not used while “${label}” is off.`);
-const DOUBLE_CHECK = "Double-check “no” answers with detect";
+// Detected boxes are judged by both double-checks.
 const usesDetect = (d) => (d.confirm_no_with_detect || d.confirm_yes_on_overlap ? null
-  : `Not used while “${DOUBLE_CHECK}” and “Confirm “yes” when workers overlap” are off.`);
-const usesBodyPart = (d) => (!d.confirm_no_with_detect ? `Not used while “${DOUBLE_CHECK}” is off.`
+  : `Not used while “${NO_CHECK}” and “${YES_CHECK}” are both off.`);
+const usesBodyPart = (d) => (!d.confirm_no_with_detect ? `Not used while “${NO_CHECK}” is off.`
   : !d.check_body_part ? "Not used while “Unverified when the body part can't be seen” is off." : null);
+const usesVerify = (d) => usesDetect(d) ?? (d.verify_detected_box ? null : "Not used while “Re-ask about the detected box” is off.");
 
-const SECTIONS = [
+const f = (key, type, label, hint, extra = {}) => ({ key, type, label, hint, ...extra });
+
+// Each card has groups of rows; `child` rows are indented under the setting they depend on.
+const CARDS = [
   {
-    title: "Decision rules",
+    id: "rules", nav: "Decision rules", title: "Decision rules",
     intro: "How Moondream's answers become PPE OK, a violation, or unverified.",
-    fields: [
-      { key: "unclear_answer", type: "select", label: "An unclear answer counts as",
-        options: [["present", "Present (no violation)"], ["unverified", "Unverified"], ["missing", "Missing (violation)"]],
-        hint: "When the reply is neither yes nor no. Present avoids false alarms; missing avoids misses." },
-      { key: "confirm_no_with_detect", type: "toggle", label: "Double-check “no” answers with detect",
-        hint: "A “no” only counts if detect can't find the item on this worker. Off: fewer calls per “no”, more false alarms." },
-      { key: "verify_detected_box", type: "toggle", label: "Re-ask about the detected box",
-        dependsOn: offUnless("confirm_no_with_detect", DOUBLE_CHECK),
-        hint: "Before a detected box overrules a “no”, Moondream is asked about that box alone (e.g. a cap is not a hard hat). One more call when it applies." },
-      { key: "min_region_overlap", type: "number", label: "Detected box inside the item's region", min: 0, max: 1, step: 0.05, unit: "× box",
-        dependsOn: usesDetect,
-        hint: "Share of a detected box that must lie in the item's region of the worker. 0 = only its centre counts (the old rule)." },
-      { key: "check_body_part", type: "toggle", label: "Unverified when the body part can't be seen",
-        dependsOn: offUnless("confirm_no_with_detect", DOUBLE_CHECK),
-        hint: "If the head (for a helmet) isn't visible, the item is unverified instead of missing." },
-      { key: "confirm_yes_on_overlap", type: "toggle", label: "Confirm “yes” when workers overlap",
-        hint: "A “yes” for a worker partly covered by another may be about the other person. It then has to be found on this worker with detect, or the item is unverified." },
-      { key: "overlap_threshold", type: "number", label: "Overlap that needs confirming", min: 0.01, max: 1, step: 0.05, unit: "× box",
-        dependsOn: offUnless("confirm_yes_on_overlap", "Confirm “yes” when workers overlap"),
-        hint: "Share of the worker's box covered by other workers." },
-      { key: "crop_padding", type: "number", label: "Crop padding", min: 0, max: 0.5, step: 0.01, unit: "× box",
-        hint: "Extra space around each worker in the image sent to Moondream. More context, but neighbours creep in." },
-      { key: "min_check_height_frac", type: "number", label: "Minimum worker height", min: 0, max: 0.5, step: 0.01, unit: "× frame",
-        hint: "Workers shorter than this are shown as “Too far” and not checked (no API calls)." },
-      { key: "min_check_height_px", type: "number", label: "…and at least", min: 0, max: 2000, step: 10, unit: "px",
-        hint: "The larger of the two limits applies, so low-resolution video doesn't get checks on workers a few pixels tall." },
+    groups: [
+      { title: "Unclear answers", fields: [
+        f("unclear_answer", "select", "An unclear answer counts as",
+          "When the reply is neither yes nor no (for example “Not sure”). Present avoids false alarms; missing avoids misses.",
+          { options: [["present", "Present (no violation)"], ["unverified", "Unverified"], ["missing", "Missing (violation)"]] }),
+      ] },
+      { title: "When Moondream says “no”", fields: [
+        f("confirm_no_with_detect", "toggle", NO_CHECK,
+          "A “no” only counts if detect can't find the item on this worker. Off: fewer calls per “no”, more false alarms."),
+        f("check_body_part", "toggle", "Unverified when the body part can't be seen",
+          "If the head (for a helmet) isn't visible, the item is unverified instead of missing.",
+          { child: true, dependsOn: offUnless("confirm_no_with_detect", NO_CHECK) }),
+      ] },
+      { title: "When Moondream says “yes”", fields: [
+        f("confirm_yes_on_overlap", "toggle", YES_CHECK,
+          "A “yes” for a worker partly covered by another may be about the other person. It then has to be found on this worker with detect, or the item is unverified."),
+        f("overlap_threshold", "number", "Overlap that needs confirming", "Share of the worker's box covered by other workers.",
+          { child: true, min: 0.01, max: 1, step: 0.05, unit: "× box", dependsOn: offUnless("confirm_yes_on_overlap", YES_CHECK) }),
+      ] },
+      { title: "Detected boxes", intro: "Used by both double-checks above to decide whether a box detect found counts for this worker.", fields: [
+        f("min_region_overlap", "number", "Inside the item's region",
+          "Share of a detected box that must lie in the item's region of the worker (set per item). 0 = only its centre counts.",
+          { min: 0, max: 1, step: 0.05, unit: "× box", dependsOn: usesDetect }),
+        f("verify_detected_box", "toggle", "Re-ask about the detected box",
+          "Moondream is asked about the box alone before it counts (a cap is not a hard hat). One more call when it applies.",
+          { dependsOn: usesDetect }),
+      ] },
+      { title: "Which workers are checked", fields: [
+        f("crop_padding", "number", "Crop padding",
+          "Extra space around each worker in the image sent to Moondream. More context, but neighbours creep in.",
+          { min: 0, max: 0.5, step: 0.01, unit: "× box" }),
+        f("min_check_height_frac", "number", "Minimum worker height",
+          "Shorter workers are shown as “Too far” and not checked (no API calls).",
+          { min: 0, max: 0.5, step: 0.01, unit: "× frame" }),
+        f("min_check_height_px", "number", "…and at least",
+          "The larger of the two limits applies, so low-resolution video doesn't get checks on workers a few pixels tall.",
+          { min: 0, max: 2000, step: 10, unit: "px" }),
+      ] },
     ],
   },
   {
-    title: "Status and voting",
+    id: "voting", nav: "Status and voting", title: "Status and voting",
     intro: "How checks become the status in the video, the violation list and the People section. All three use the same rule.",
-    fields: [
-      { key: "vote_window", type: "number", label: "Vote over the last", min: 1, max: 9, step: 1, unit: "checks",
-        hint: "An item is shown missing when it was missing in most of this many recent checks. 1 = no smoothing." },
-      { key: "confirm_checks", type: "number", label: "Missing in at least", min: 1, max: 9, step: 1, unit: "checks",
-        hint: "Before a box turns red. A new worker shows “Checking…” until they have this many checks. Can't exceed the vote window." },
-      { key: "min_check_age_sec", type: "number", label: "Check a new person after", min: 0, max: 10, step: 0.1, unit: "s",
-        hint: "Tracks younger than this aren't checked, so short-lived false detections don't cost calls or get flagged." },
-      { key: "skip_edge_arrivals", type: "toggle", label: "Wait until a newcomer is fully in frame",
-        hint: "A worker whose box touches the frame edge gets their first check once they're fully visible (or at the next regular check)." },
-      { key: "max_failed_checks", type: "number", label: "Stop the run after", min: 1, max: 100, step: 1, unit: "failed checks in a row",
-        hint: "When Moondream doesn't answer, the run stops instead of retrying for a long time." },
+    groups: [
+      { title: "Status", fields: [
+        f("vote_window", "number", "Vote over the last",
+          "An item is shown missing when it was missing in most of this many recent checks. 1 = no smoothing.",
+          { min: 1, max: 9, step: 1, unit: "checks" }),
+        f("confirm_checks", "number", "Missing in at least",
+          "Before a box turns red. A new worker shows “Checking…” until they have this many checks. Can't exceed the vote window.",
+          { min: 1, max: 9, step: 1, unit: "checks",
+            dependsOn: (d) => (d.confirm_checks > d.vote_window ? "Larger than the vote window: this can't be saved." : null), warnOnly: true }),
+      ] },
+      { title: "When checks happen", fields: [
+        f("min_check_age_sec", "number", "Check a new person after",
+          "Tracks younger than this aren't checked, so short-lived false detections don't cost calls or get flagged.",
+          { min: 0, max: 10, step: 0.1, unit: "s" }),
+        f("skip_edge_arrivals", "toggle", "Wait until a newcomer is fully in frame",
+          "A worker whose box touches the frame edge gets their first check once they're fully visible (or at the next regular check)."),
+        f("max_failed_checks", "number", "Stop the run after",
+          "When Moondream doesn't answer, the run stops instead of retrying for a long time.",
+          { min: 1, max: 100, step: 1, unit: "failed checks in a row" }),
+      ] },
     ],
   },
   {
-    title: "Moondream requests",
-    intro: "Which model answers, and speed versus rate limits.",
-    endpointNote: true,
-    fields: [
-      { key: "moondream_model", type: "text", label: "Moondream model", list: "md-models",
-        hint: "Sent with every request so results don't change when the server's default does. Moondream Cloud accepts moondream3.1-9B-A2B and moondream3-preview." },
-      { key: "parallel_requests", type: "number", label: "Parallel requests", min: 1, max: 16, step: 1,
-        hint: "Higher is faster but hits Moondream's rate limit (HTTP 429) sooner." },
-      { key: "retry_attempts", type: "number", label: "Attempts per call", min: 1, max: 8, step: 1,
-        hint: "Failed calls are retried after 1, 2, 4… seconds. Lower gives up faster during an outage." },
+    id: "requests", nav: "Requests", title: "Moondream requests",
+    intro: "Which model answers, and speed versus rate limits.", endpointNote: true,
+    groups: [
+      { fields: [
+        f("moondream_model", "text", "Moondream model",
+          "Sent with every request so results don't change when the server's default does. Moondream Cloud accepts moondream3.1-9B-A2B and moondream3-preview.",
+          { list: "md-models" }),
+        f("parallel_requests", "number", "Parallel requests", "Higher is faster but hits Moondream's rate limit (HTTP 429) sooner.",
+          { min: 1, max: 16, step: 1 }),
+        f("retry_attempts", "number", "Attempts per call", "Failed calls are retried after 1, 2, 4… seconds. Lower gives up faster during an outage.",
+          { min: 1, max: 8, step: 1 }),
+      ] },
     ],
   },
   {
-    title: "Person tracking",
+    id: "tracking", nav: "Tracking", title: "Person tracking",
     intro: "YOLO finds people on every frame; BoT-SORT keeps their IDs.",
-    fields: [
-      { key: "person_model", type: "model", label: "Detection model",
-        hint: "Bigger models find more partly hidden workers but are slower. Put .pt files in models/." },
-      { key: "detector_imgsz", type: "select", label: "Detector input size", numeric: true,
-        options: [320, 480, 640, 800, 960, 1280, 1600, 1920].map((v) => [v, `${v} px`]),
-        hint: "Frames are scaled to this. Larger finds smaller people but is slower." },
-      { key: "detector_conf", type: "number", label: "Detection confidence", min: 0.01, max: 0.9, step: 0.01,
-        hint: "Weakest detection the tracker considers. Low values help keep partly hidden workers." },
-      { key: "new_track_thresh", type: "number", label: "Confidence to start a new person", min: 0.05, max: 0.95, step: 0.05,
-        hint: "Lower tracks more hard-to-see workers but creates more short, spurious IDs." },
-      { key: "min_track_age_sec", type: "number", label: "Ignore tracks younger than", min: 0, max: 3, step: 0.1, unit: "s",
-        hint: "Filters flicker. A track must last this long before its box is drawn. Checks wait longer (see “Check a new person after”)." },
-      { key: "hidden_sec", type: "number", label: "Keep a hidden worker's ID for", min: 0, max: 60, step: 1, unit: "s",
-        hint: "Someone out of view for less than this keeps their ID when they reappear near where they were lost." },
-      { key: "coast_sec", type: "number", label: "Keep drawing a missed box for", min: 0, max: 3, step: 0.1, unit: "s",
-        hint: "When the detector misses someone for a few frames, their last box stays on screen instead of blinking off. Not checked meanwhile." },
-      { key: "fixed_camera", type: "toggle", label: "Fixed camera",
-        hint: "Skips camera-motion compensation: faster, and steadier boxes when the camera doesn't move." },
-      { key: "with_reid", type: "toggle", label: "Compare appearance (ReID)",
-        hint: "Also matches people by appearance (models/yolo11n-cls.pt, downloaded on first use). About 40% slower per frame; in our tests it didn't prevent ID swaps when workers cross." },
+    groups: [
+      { title: "Finding people", fields: [
+        f("person_model", "model", "Detection model", "Bigger models find more partly hidden workers but are slower. Put .pt files in models/."),
+        f("detector_imgsz", "select", "Detector input size", "Frames are scaled to this. Larger finds smaller people but is slower.",
+          { numeric: true, options: [320, 480, 640, 800, 960, 1280, 1600, 1920].map((v) => [v, `${v} px`]) }),
+        f("detector_conf", "number", "Detection confidence", "Weakest detection the tracker considers. Low values help keep partly hidden workers.",
+          { min: 0.01, max: 0.9, step: 0.01 }),
+      ] },
+      { title: "Keeping IDs", fields: [
+        f("new_track_thresh", "number", "Confidence to start a new person",
+          "Lower tracks more hard-to-see workers but creates more short, spurious IDs.", { min: 0.05, max: 0.95, step: 0.05 }),
+        f("min_track_age_sec", "number", "Ignore tracks younger than",
+          "Filters flicker: a track must last this long before its box is drawn. Checks wait longer (see “Check a new person after”).",
+          { min: 0, max: 3, step: 0.1, unit: "s" }),
+        f("hidden_sec", "number", "Keep a hidden worker's ID for",
+          "Someone out of view for less than this keeps their ID when they reappear near where they were lost.",
+          { min: 0, max: 60, step: 1, unit: "s" }),
+        f("coast_sec", "number", "Keep drawing a missed box for",
+          "When the detector misses someone for a few frames, their last box stays on screen instead of blinking off. Not checked meanwhile.",
+          { min: 0, max: 3, step: 0.1, unit: "s" }),
+      ] },
+      { title: "Camera and appearance", fields: [
+        f("fixed_camera", "toggle", "Fixed camera", "Skips camera-motion compensation: faster, and steadier boxes when the camera doesn't move."),
+        f("with_reid", "toggle", "Compare appearance (ReID)",
+          "Also matches people by appearance (models/yolo11n-cls.pt, downloaded on first use). About 40% slower per frame; in our tests it didn't prevent ID swaps when workers cross."),
+      ] },
     ],
   },
+];
+
+// Per-item settings, shown one item at a time.
+const ITEM_ROWS = [
+  { key: "question", type: "textarea", label: "Wording", hint: "Replaces {item} in the question template." },
+  { key: "detect_term", type: "text", label: "Detect term",
+    hint: "What detect looks for to overrule a “no”, or to confirm a “yes” when workers overlap.", dependsOn: usesDetect },
+  { key: "body_part", type: "text", label: "Body part", hint: "If detect can't find it on the worker, the item is unverified. Blank = no check.",
+    dependsOn: usesBodyPart, blankIsNull: true },
+  { pair: true, label: "Region", hint: "Where on the worker the item may be, as a share of the box height from the top (negative = above the box).",
+    dependsOn: usesDetect, parts: [["region_top", "top", -0.5, 1.5, 0.05], ["region_bottom", "bottom", -0.5, 1.5, 0.05]] },
+  { pair: true, label: "Detected width", hint: "Plausible width of a detected box, as a share of the worker's box width.",
+    dependsOn: usesDetect, parts: [["min_width", "min", 0, 2, 0.01], ["max_width", "max", 0, 2, 0.05]] },
+  { pair: true, label: "Detected height", hint: "Plausible height of a detected box, as a share of the worker's box height.",
+    dependsOn: usesDetect, parts: [["min_height", "min", 0, 2, 0.01], ["max_height", "max", 0, 2, 0.05]] },
 ];
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -141,6 +191,7 @@ export async function renderDev(root) {
     } catch (e) {
       errorBox.replaceChildren(h("h3", {}, "Not saved"), h("p", { style: "white-space:pre-line" }, e.message));
       errorBox.hidden = false;
+      errorBox.scrollIntoView({ behavior: "smooth", block: "center" });
     }
     refreshBar();
   }
@@ -164,14 +215,11 @@ export async function renderDev(root) {
     refreshBar();
   }
 
-  // ---- generic field --------------------------------------------------------
-  // get/set read and write the draft; def() returns the default value.
-  function field({ id, label, hint, unit, type, options, min, max, step, numeric, list, dependsOn }, get, set, def) {
-    const dot = h("span", { class: "changed-dot", title: "Changed from the default" });
-    const reset = h("button", { type: "button", class: "link-btn", onclick: () => { set(clone(def())); refreshBar(); } }, "Reset");
+  // ---- one settings row: label and description on the left, control on the right ----
+  function makeInput({ id, type, options, min, max, step, numeric, list }, set) {
     let input;
     if (type === "toggle") {
-      input = h("input", { id, type: "checkbox", class: "switch", onchange: () => { set(input.checked); refreshBar(); } });
+      input = h("input", { id, type: "checkbox", class: "switch", role: "switch", onchange: () => { set(input.checked); refreshBar(); } });
     } else if (type === "select" || type === "model") {
       input = h("select", { id, class: "input", onchange: () => { set(numeric ? Number(input.value) : input.value); refreshBar(); } });
       const opts = type === "model"
@@ -179,39 +227,92 @@ export async function renderDev(root) {
         : options;
       input.replaceChildren(...opts.map(([v, t]) => h("option", { value: v }, t)));
     } else if (type === "textarea") {
-      input = h("textarea", { id, class: "input textarea", rows: 3, oninput: () => { set(input.value); refreshBar(); } });
+      input = h("textarea", { id, class: "input textarea", rows: 3, spellcheck: "false", oninput: () => { set(input.value); refreshBar(); } });
     } else if (type === "text") {
       input = h("input", { id, class: "input", type: "text", list, autocomplete: "off", spellcheck: "false",
         oninput: () => { set(input.value); refreshBar(); } });
     } else {
       input = h("input", { id, class: "input num-input", type: "number", min, max, step,
-        oninput: () => { if (input.value !== "") { set(Number(input.value)); refreshBar(); } } });
+        oninput: () => { if (input.value !== "" && !Number.isNaN(input.valueAsNumber)) { set(input.valueAsNumber); refreshBar(); } } });
     }
-    const offNote = h("p", { class: "off-note", hidden: true });
-    const row = h("div", { class: `dev-field ${type === "toggle" ? "is-toggle" : ""}` },
-      h("div", { class: "dev-label" }, dot, h("label", { for: id }, label), reset),
-      h("div", { class: "dev-input" }, input, unit ? h("span", { class: "unit" }, unit) : null),
-      hint ? h("p", { class: "hint" }, hint) : null,
-      offNote);
+    return input;
+  }
+
+  function showValue(input, type, v) {
+    if (type === "toggle") input.checked = !!v;
+    else if (document.activeElement !== input) input.value = v ?? "";
+  }
+
+  // parts: [{input, type, get, def, reset}] — one row may hold several inputs (e.g. min and max).
+  function row({ id, label, hint, type, wide, child, dependsOn, warnOnly }, control, parts) {
+    const dot = h("span", { class: "changed-dot", title: "Changed from the default" });
+    const reset = h("button", { type: "button", class: "link-btn", onclick: () => { parts.forEach((p) => p.reset()); refreshBar(); } }, "Reset");
+    const note = h("p", { class: warnOnly ? "row-note is-error" : "row-note", hidden: true });
+    const el = h("div", { class: `set-row${type === "toggle" ? " is-toggle" : ""}${wide ? " is-wide" : ""}${child ? " is-child" : ""}` },
+      h("div", { class: "set-text" },
+        h("div", { class: "set-label" }, h("label", { for: id }, label), dot, reset),
+        hint ? h("p", { class: "hint" }, hint) : null,
+        note),
+      h("div", { class: "set-control" }, control));
     controls.push({
       refresh() {
-        const v = get();
-        if (type === "toggle") input.checked = !!v;
-        else if (document.activeElement !== input) input.value = v ?? "";
-        const changed = !same(v ?? null, def() ?? null);
+        let changed = false;
+        for (const p of parts) {
+          showValue(p.input, p.type, p.get());
+          changed ||= !same(p.get() ?? null, p.def() ?? null);
+        }
         dot.hidden = reset.hidden = !changed;
-        const off = dependsOn ? dependsOn(draft) : null;
-        row.classList.toggle("is-off", !!off);
-        offNote.hidden = !off;
-        offNote.textContent = off ?? "";
+        const why = dependsOn ? dependsOn(draft) : null;
+        el.classList.toggle("is-off", !!why && !warnOnly);
+        note.hidden = !why;
+        note.textContent = why ?? "";
       },
     });
-    return row;
+    return el;
+  }
+
+  // A setting stored at draft[key] (or obj()[key] for per-item settings).
+  function setting(spec, obj = () => draft, defObj = () => defaults, idPrefix = "f-") {
+    const id = `${idPrefix}${spec.key}`;
+    const set = (v) => { obj()[spec.key] = spec.blankIsNull ? (v.trim() || null) : v; };
+    const input = makeInput({ ...spec, id }, set);
+    const unit = spec.unit ? h("span", { class: "unit" }, spec.unit) : null;
+    const part = { input, type: spec.type, get: () => obj()[spec.key], def: () => defObj()[spec.key],
+      reset: () => { obj()[spec.key] = clone(defObj()[spec.key]); } };
+    return row({ ...spec, id, wide: spec.type === "textarea" }, [input, unit], [part]);
+  }
+
+  // Two numbers in one row, e.g. region top and bottom.
+  function pairSetting(spec, obj, defObj, idPrefix) {
+    const parts = spec.parts.map(([key, label, min, max, step]) => {
+      const id = `${idPrefix}${key}`;
+      const input = makeInput({ id, type: "number", min, max, step }, (v) => { obj()[key] = v; });
+      return { key, label, id, input, type: "number", get: () => obj()[key], def: () => defObj()[key],
+        reset: () => { obj()[key] = defObj()[key]; } };
+    });
+    const control = h("div", { class: "pair" }, parts.flatMap((p, i) => [
+      i ? h("span", { class: "pair-sep" }, "–") : null,
+      h("label", { class: "pair-part" }, h("span", {}, p.label), p.input)]));
+    return row({ ...spec, id: parts[0].id }, control, parts);
+  }
+
+  function group({ title, intro, fields }, render) {
+    return h("div", { class: "set-group" },
+      title ? h("h3", { class: "set-group-title" }, title) : null,
+      intro ? h("p", { class: "hint set-group-intro" }, intro) : null,
+      h("div", { class: "set-rows" }, fields.map(render)));
+  }
+
+  function card(id, title, intro, ...body) {
+    return h("section", { class: "card card-pad dev-card", id: `dev-${id}` },
+      h("div", { class: "card-head" }, h("div", {}, h("h2", {}, title), intro ? h("p", {}, intro) : null)),
+      ...body);
   }
 
   // ---- prompts ----------------------------------------------------------------
   const preview = h("p", { class: "prompt-preview" });
-  const previewItem = h("select", { class: "input", style: "max-width:140px", onchange: () => refreshPreview() },
+  const previewItem = h("select", { class: "input", style: "max-width:140px", "aria-label": "Preview for item",
+    onchange: () => refreshPreview() },
     Object.entries(ITEM_LABELS).map(([k, v]) => h("option", { value: k }, v)));
   function refreshPreview() {
     const it = draft.items[previewItem.value];
@@ -221,82 +322,85 @@ export async function renderDev(root) {
   }
   controls.push({ refresh: refreshPreview });
 
-  const promptCard = h("section", { class: "card card-pad" },
-    h("div", { class: "card-head" }, h("div", {},
-      h("h2", {}, "Moondream prompts"),
-      h("p", {}, "The question asked for every worker and PPE item. {item} is replaced by the item's wording below."))),
-    field({ id: "t-template", type: "textarea", label: "Question template",
-      hint: "Keep “Answer only yes or no”: other replies are handled by the unclear-answer rule." },
-      () => draft.question_template, (v) => { draft.question_template = v; }, () => defaults.question_template),
+  const promptCard = card("prompts", "Moondream prompts", "What Moondream is asked. Unsaved changes are used by the playground above.",
+    group({ title: "Question for each item", fields: [
+      { key: "question_template", type: "textarea", label: "Question template",
+        hint: "{item} is replaced by the item's wording (see PPE items). Keep “Answer only yes or no”: other replies count as unclear." },
+    ] }, (s) => setting(s)),
     h("div", { class: "prompt-preview-row" }, h("span", { class: "eyebrow" }, "Sent for"), previewItem, preview),
-    field({ id: "t-verify", type: "textarea", label: "Re-check question for a detected box",
-      hint: "{term} is replaced by the item's detect term. Asked about the detected box alone before it can overrule a “no”.",
-      dependsOn: (d) => (!d.confirm_no_with_detect || !d.verify_detected_box
-        ? "Not used while “Double-check “no” answers with detect” or “Re-ask about the detected box” is off." : null) },
-      () => draft.verify_template, (v) => { draft.verify_template = v; }, () => defaults.verify_template),
-    field({ id: "t-one-query", type: "toggle", label: "One question for all items",
-      hint: "Ask about every required item in one request per worker instead of one per item: fewer calls, but answers may be less reliable. Items missing from the reply are asked about on their own." },
-      () => draft.one_query_per_worker, (v) => { draft.one_query_per_worker = v; }, () => defaults.one_query_per_worker),
-    field({ id: "t-multi", type: "textarea", label: "Question for all items",
-      hint: "{items} is replaced by one “name: wording” line per item. The reply must name each item followed by yes or no.",
-      dependsOn: offUnless("one_query_per_worker", "One question for all items") },
-      () => draft.multi_template, (v) => { draft.multi_template = v; }, () => defaults.multi_template),
-    h("div", { class: "divider" }),
-    h("h3", {}, "Per item"),
-    h("p", { class: "hint", style: "margin:4px 0 14px" },
-      "Wording: fills {item}. Detect term: what detect looks for to overrule a “no” (or to confirm a “yes” when workers overlap). Body part: if it can't be found, the item is unverified. Region: where on the worker the item may be, as a share of the box height from the top (negative = above the box). Size: how big a detected box may be, as a share of the worker's box."),
-    h("div", { class: "item-grid" }, Object.keys(ITEM_LABELS).map((key) => {
-      const g = (k) => () => draft.items[key][k];
-      const s = (k) => (v) => { draft.items[key][k] = v; };
-      const d = (k) => () => defaults.items[key][k];
-      return h("div", { class: "item-card" },
-        h("h3", {}, ITEM_LABELS[key]),
-        field({ id: `i-${key}-q`, type: "textarea", label: "Wording" }, g("question"), s("question"), d("question")),
-        field({ id: `i-${key}-d`, type: "text", label: "Detect term", dependsOn: usesDetect },
-          g("detect_term"), s("detect_term"), d("detect_term")),
-        field({ id: `i-${key}-b`, type: "text", label: "Body part (blank = none)", dependsOn: usesBodyPart },
-          g("body_part"), (v) => { draft.items[key].body_part = v.trim() || null; }, d("body_part")),
-        h("div", { class: "region-row" },
-          field({ id: `i-${key}-rt`, type: "number", label: "Region top", min: -0.5, max: 1.5, step: 0.05, dependsOn: usesDetect },
-            g("region_top"), s("region_top"), d("region_top")),
-          field({ id: `i-${key}-rb`, type: "number", label: "Region bottom", min: -0.5, max: 1.5, step: 0.05, dependsOn: usesDetect },
-            g("region_bottom"), s("region_bottom"), d("region_bottom"))),
-        h("span", { class: "sub-head" }, "Detected size (× worker box)"),
-        h("div", { class: "region-row" },
-          field({ id: `i-${key}-wmin`, type: "number", label: "Width min", min: 0, max: 2, step: 0.05, dependsOn: usesDetect },
-            g("min_width"), s("min_width"), d("min_width")),
-          field({ id: `i-${key}-wmax`, type: "number", label: "Width max", min: 0, max: 2, step: 0.05, dependsOn: usesDetect },
-            g("max_width"), s("max_width"), d("max_width")),
-          field({ id: `i-${key}-hmin`, type: "number", label: "Height min", min: 0, max: 2, step: 0.01, dependsOn: usesDetect },
-            g("min_height"), s("min_height"), d("min_height")),
-          field({ id: `i-${key}-hmax`, type: "number", label: "Height max", min: 0, max: 2, step: 0.05, dependsOn: usesDetect },
-            g("max_height"), s("max_height"), d("max_height"))));
-    })));
+    group({ title: "One question for all items", fields: [
+      { key: "one_query_per_worker", type: "toggle", label: "Ask about all items at once",
+        hint: "One request per worker instead of one per item: fewer calls, but answers may be less reliable. Items missing from the reply are asked about on their own." },
+      { key: "multi_template", type: "textarea", label: "Question for all items", child: true,
+        hint: "{items} is replaced by one “name: wording” line per item. The reply must name each item followed by yes or no.",
+        dependsOn: offUnless("one_query_per_worker", "Ask about all items at once") },
+    ] }, (s) => setting(s)),
+    group({ title: "Re-check of a detected box", fields: [
+      { key: "verify_template", type: "textarea", label: "Re-check question",
+        hint: "{term} is replaced by the item's detect term. Asked about a detected box alone before it counts.",
+        dependsOn: usesVerify },
+    ] }, (s) => setting(s)));
 
-  const sectionCards = SECTIONS.map((sec) => h("section", { class: "card card-pad" },
-    h("div", { class: "card-head" }, h("div", {}, h("h2", {}, sec.title), h("p", {}, sec.intro))),
-    sec.endpointNote ? h("p", { class: "endpoint-note" },
+  // ---- PPE items: one tab per item ------------------------------------------------
+  let currentItem = "helmet";
+  const tabs = h("div", { class: "item-tabs", role: "tablist", "aria-label": "PPE item" });
+  const panels = {};
+  const tabButtons = {};
+  for (const key of Object.keys(ITEM_LABELS)) {
+    const obj = () => draft.items[key];
+    const defObj = () => defaults.items[key];
+    panels[key] = h("div", { class: "set-rows", role: "tabpanel", id: `item-panel-${key}`, hidden: key !== currentItem },
+      ITEM_ROWS.map((r) => (r.pair ? pairSetting(r, obj, defObj, `i-${key}-`) : setting(r, obj, defObj, `i-${key}-`))));
+    const dot = h("span", { class: "changed-dot", title: "Changed from the default" });
+    tabButtons[key] = h("button", { type: "button", role: "tab", class: "item-tab", "aria-controls": `item-panel-${key}`,
+      onclick: () => selectItem(key) }, ITEM_LABELS[key], dot);
+    controls.push({ refresh() { dot.hidden = same(draft.items[key], defaults.items[key]); } });
+  }
+  function selectItem(key) {
+    currentItem = key;
+    for (const k of Object.keys(panels)) {
+      panels[k].hidden = k !== key;
+      tabButtons[k].setAttribute("aria-selected", String(k === key));
+    }
+  }
+  tabs.append(...Object.values(tabButtons));
+  selectItem(currentItem);
+  const itemsCard = card("items", "PPE items", "How each item is asked about and checked. A dot marks items changed from the defaults.",
+    tabs, h("div", { class: "set-group" }, ...Object.values(panels)));
+
+  // ---- other settings ----------------------------------------------------------------
+  const settingCards = CARDS.map((c) => card(c.id, c.title, c.intro,
+    c.endpointNote ? h("p", { class: "endpoint-note" },
       "Endpoint: ", h("code", {}, state.moondream_endpoint),
       h("span", { class: "hint" }, " · set MOONDREAM_ENDPOINT in the server's .env to use another provider or a self-hosted server")) : null,
-    sec.endpointNote ? h("datalist", { id: "md-models" },
+    c.endpointNote ? h("datalist", { id: "md-models" },
       ["moondream3.1-9B-A2B", "moondream3-preview"].map((m) => h("option", { value: m }))) : null,
-    h("div", { class: "dev-fields" }, sec.fields.map((f) =>
-      field({ ...f, id: `f-${f.key}` }, () => draft[f.key], (v) => { draft[f.key] = v; }, () => defaults[f.key])))));
+    ...c.groups.map((g) => group(g, (s) => setting(s)))));
+  const cards = { rules: settingCards[0], voting: settingCards[1], requests: settingCards[2], tracking: settingCards[3] };
 
   // ---- playground ----------------------------------------------------------------
   const playground = await buildPlayground(() => draft);
+  playground.id = "dev-playground";
 
-  root.replaceChildren(h("div", { class: "page" },
+  const nav = h("nav", { class: "dev-nav", "aria-label": "Sections" },
+    [["playground", "Playground"], ["prompts", "Prompts"], ["items", "PPE items"], ["rules", "Decision rules"],
+      ["voting", "Status and voting"], ["requests", "Requests"], ["tracking", "Tracking"]]
+      .map(([id, label]) => h("button", { type: "button", onclick: () => document.getElementById(`dev-${id}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }) }, label)));
+
+  root.replaceChildren(h("div", { class: "page dev-page" },
     h("div", { class: "run-head" },
       h("div", { class: "title" },
         h("span", { class: "eyebrow" }, "Developer options"),
         h("h1", {}, "Tune detection"),
         changesNote),
-      h("div", { class: "actions" }, dirtyPill, discardBtn, resetBtn, saveBtn)),
+      h("div", { class: "actions" }, resetBtn)),
+    h("div", { class: "dev-bar" }, nav, h("div", { class: "actions" }, dirtyPill, discardBtn, saveBtn)),
     errorBox,
     playground,
     promptCard,
-    ...sectionCards));
+    itemsCard,
+    cards.rules, cards.voting, cards.requests, cards.tracking));
   refreshBar();
   return () => {};
 }

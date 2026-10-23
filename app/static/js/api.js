@@ -24,7 +24,11 @@ async function request(path, options = {}) {
       if (typeof detail === "string") message = detail;
       else if (Array.isArray(detail)) {
         // FastAPI validation errors: [{loc: ["body", "crop_padding"], msg: "..."}]
-        message = detail.map((d) => `${d.loc.filter((p) => p !== "body").join(".")}: ${d.msg}`).join("\n");
+        message = detail.map((d) => {
+          const where = d.loc.filter((p) => p !== "body").join(".");
+          const msg = String(d.msg).replace(/^Value error, /, "");
+          return where ? `${where}: ${msg}` : msg;
+        }).join("\n");
       }
     } catch { /* not JSON */ }
     const err = new Error(message);

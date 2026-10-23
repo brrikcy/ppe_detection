@@ -171,3 +171,46 @@ def test_mp4v_video_is_converted_for_browsers(tmp_path):
     assert not is_browser_playable(path)  # OpenCV reports mp4v as FMP4
     assert VideoConverter().ensure_playable(path)
     assert video_fourcc(path) in {"avc1", "h264"}
+
+
+def test_person_profile_has_every_check_with_its_crop(client, tmp_path):
+    run_id = _upload(client, tmp_path, required_ppe="helmet,vest").json()["meta"]["id"]
+    _wait(client, run_id)
+    ok = client.get(f"/api/runs/{run_id}/persons/1").json()
+    assert ok["person"]["id"] == 1 and ok["crops_for_all_checks"] is True
+    assert {c["label"]: c["count"] for c in ok["classes"]} == {"PPE OK": 3}
+    bad = client.get(f"/api/runs/{run_id}/persons/2").json()
+    # The FakeModel finds the head but no PPE on the right-hand worker.
+    assert {c["label"]: c["count"] for c in bad["classes"]} == {"No Helmet": 3, "No Vest": 3}
+    assert [c["time_sec"] for c in bad["checks"]] == [0.0, 1.0, 2.0]
+    assert [c["status"] for c in bad["checks"]] == ["pending", "violation", "violation"]
+    for c in ok["checks"] + bad["checks"]:  # a crop for every check, not just violations
+        assert client.get(f"/api/runs/{run_id}/snapshots/{c['snapshot']}").status_code == 200
+    assert client.get(f"/api/runs/{run_id}/persons/99").status_code == 404
+
+
+def test_rerun_copies_the_video_and_chooses_the_settings(client, tmp_path):
+    first = _upload(client, tmp_path, required_ppe="helmet", analysis_interval_sec="0.5", max_seconds="2").json()
+    first_id = first["meta"]["id"]
+    _wait(client, first_id)
+    client.put("/api/dev/tuning", json={**client.get("/api/dev/tuning").json()["active"], "crop_padding": 0.2})
+
+    r = client.post(f"/api/runs/{first_id}/rerun", json={"settings": "current"})
+    assert r.status_code == 201, r.text
+    again = _wait(client, r.json()["meta"]["id"])
+    m = again["meta"]
+    assert m["status"] == "completed" and m["rerun_of"] == first_id and m["name"] == first["meta"]["name"]
+    assert (m["options"]["required_ppe"], m["options"]["analysis_interval_sec"], m["options"]["max_seconds"]) == \
+        (["helmet"], 0.5, 2.0)
+    assert m["options"]["tuning"]["crop_padding"] == 0.2  # the settings saved now
+    orig = client.post(f"/api/runs/{first_id}/rerun", json={"settings": "original"}).json()
+    assert orig["meta"]["options"]["tuning"]["crop_padding"] == 0.05  # the first run's settings
+    _wait(client, orig["meta"]["id"])
+
+    # The source run is untouched and can be deleted without breaking the new run's video.
+    assert client.delete(f"/api/runs/{first_id}").status_code == 204
+    assert client.get(f"/api/runs/{again['meta']['id']}/video").status_code == 200
+
+    assert client.post(f"/api/runs/{again['meta']['id']}/rerun", json={"api_key": "bad-key"}).status_code == 401
+    assert client.post(f"/api/runs/{again['meta']['id']}/rerun", json={"settings": "other"}).status_code == 422
+    assert client.post("/api/runs/nope/rerun", json={}).status_code == 404

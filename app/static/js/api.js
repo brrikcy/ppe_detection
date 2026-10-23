@@ -44,6 +44,10 @@ export const api = {
   listRuns: () => request("/api/runs"),
   getRun: (id) => request(`/api/runs/${encodeURIComponent(id)}`),
   deleteRun: (id) => request(`/api/runs/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  getPerson: (id, personId) => request(`/api/runs/${encodeURIComponent(id)}/persons/${encodeURIComponent(personId)}`),
+  rerun: (id, body) => request(`/api/runs/${encodeURIComponent(id)}/rerun`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }),
 
   checkKey(apiKey) {
     const form = new FormData();

@@ -10,7 +10,7 @@ const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 let mode = "frame"; // remembered between openings
 
 /**
- * @param {{time_sec:number, violations:string[], cropUrl:string|null, frameUrl:string|null}[]} items
+ * @param {{time_sec:number, violations:string[], notes?:string[], cropUrl:string|null, frameUrl:string|null}[]} items
  * @param {number} start
  * @param {{onShowInVideo?: (item) => void}} opts
  */
@@ -60,8 +60,10 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
     person.textContent = it.track_id != null ? `Person #${it.track_id}` : "";
     person.hidden = it.track_id == null;
     time.textContent = fmt.timePrecise(it.time_sec);
-    tags.replaceChildren(...(it.violations.length
-      ? it.violations.map((v) => h("span", { class: "tag-bad" }, v))
+    // notes: other findings of the check, e.g. "Helmet not visible" (person profiles).
+    const notes = it.notes ?? [];
+    tags.replaceChildren(...(it.violations.length || notes.length
+      ? [...it.violations.map((v) => h("span", { class: "tag-bad" }, v)), ...notes.map((n) => h("span", { class: "tag-warn" }, n))]
       : [h("span", { class: "tag-ok" }, "PPE OK")]));
     for (const [k, b] of Object.entries(modeBtns)) {
       b.setAttribute("aria-pressed", String(k === m));

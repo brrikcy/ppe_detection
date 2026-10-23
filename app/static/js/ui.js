@@ -25,6 +25,12 @@ export const fmt = {
     const m = Math.floor(sec / 60);
     return `${m}:${(sec - m * 60).toFixed(1).padStart(4, "0")}`;
   },
+  // Rough remaining time: "40 s", "3 min", "1 h 5 min".
+  duration(sec) {
+    if (sec < 60) return `${Math.max(5, Math.round(sec / 5) * 5)} s`;
+    if (sec < 3600) return `${Math.round(sec / 60)} min`;
+    return `${Math.floor(sec / 3600)} h ${Math.round((sec % 3600) / 60)} min`;
+  },
   pct(x, digits = 0) {
     return x == null ? "–" : `${(x * 100).toFixed(digits)}%`;
   },

@@ -68,20 +68,20 @@ python run.py --port 8080 --no-browser
 
 1. Optionally enter a Moondream API key. If you leave it empty, the server uses `MOONDREAM_API_KEY` from `.env`. **Test key** checks it with one call. The key is checked again when you start a run, so a wrong key shows on the form instead of creating a failed run. Keys are never written to disk.
 2. Drop in a video, choose the required PPE, the check interval (0.5, 1, 2 or 5s) and optionally a time limit, then click **Run inference**. The form shows an estimate of the Moondream calls.
-3. While the run is processing, you see live progress, the latest checked frame and the timeline so far. You can leave the page; the run keeps going.
+3. While the run is processing, the page fills in live: the annotated video as it's being written (refreshed about twice a second) with a **Live** badge and the video time, progress with an estimate of the time left, what it's doing right now (e.g. "Asking Moondream about 3 workers at 0:04…", so a slow answer doesn't look like a freeze), running counts (violations, people, worker checks, compliance), the compliance chart growing column by column, violations sliding in as they're found (newest first), and a strip of the people found so far, coloured by status (click one to open their profile). The page is updated in place rather than redrawn, and images swap in once loaded, so nothing flickers. You can leave the page; the run keeps going.
 4. When it finishes, the dashboard shows:
    - **Summary figures**: compliance (OK checks out of OK + violation checks; checks where an item couldn't be seen and first checks are left out and listed), violation incidents, share of time with a violation, and people tracked.
    - **A warning** when worker checks failed, and a stronger one when more than 10% failed, because the results are then incomplete.
    - **The annotated video**, with Video and Report download buttons. Below it: how many regular checks and arrival checks were made.
    - **Violations by type**, counted per incident, and items it couldn't verify. A low-coverage warning appears when an item could only be seen in a minority of checks, with a count of workers too far away to check.
    - **Compliance over time**: a chart of workers on screen at each regular check, split into PPE OK, item not visible, PPE violation, and not checked (too far, too new, or failed). Click a column to jump the video there.
-   - **People**: one card per tracked worker with their ID, photo, status, time on screen and how often each item was missing in single checks. Click a card to see that person's images.
+   - **People**: one card per tracked worker with their ID, photo, status, time on screen and how often each item was missing in single checks. Click a card to open the worker's **profile**: their status, how many of their checks found each class (PPE OK, each missing item, each item not visible, failed checks), and a gallery of every photo taken of them at each check. Click a class to show only those photos, and a photo to enlarge it (with "Show in video").
      - **Flagged**: their status showed an item missing at some point (the same rule as the red box in the video), with the number of incidents and the time in violation. A violation of any length counts, even if the person was compliant most of the time.
      - **Not verified**: an item couldn't be seen in most of their checks.
      - **Seen briefly**: not checked often enough for a verdict.
      - **PPE OK**: otherwise. Single-check misreads the vote ignored are listed on the card.
    - **Violations**: one card per incident, i.e. a person whose status showed missing PPE, from the first to the last check in a row. Filterable by type. Click one to open the image viewer (← → to browse, full frame or worker crop, "Show in video").
-5. Every run is listed in the sidebar, so you can switch between runs or delete them. Runs made with non-default developer settings show a **Custom settings** chip; hover it to see what was changed.
+5. Every run is listed in the sidebar, so you can switch between runs or delete them. **Run again** inspects the same video as a new run, with the same PPE items, interval and time limit, and either the current developer settings (to try out a change) or exactly the settings that run used. The new run links back to the original, which stays as it was. Runs made with non-default developer settings show a **Custom settings** chip; hover it to see what was changed.
 
 ### Developer options
 
@@ -114,7 +114,7 @@ input.<ext>      the uploaded video
 annotated.mp4    the output video
 annotated.json   the full per-check report
 preview.jpg      latest checked frame, shown while running
-snapshots/       crop of each worker with a missing item, per check
+snapshots/       crop of each checked worker, per check (for the people profiles)
 frames/          full annotated frame (as drawn in the video) for each check with a violation
 people/          best view of each tracked worker, <id>.jpg
 ```
@@ -147,6 +147,8 @@ people/          best view of each tracked worker, <id>.jpg
 | GET | `/api/runs` | All runs, newest first |
 | GET | `/api/runs/{id}` | Status, progress and dashboard summary (partial while running) |
 | GET | `/api/runs/{id}/video` · `/report` · `/preview` · `/snapshots/{name}` · `/frames/{name}` · `/people/{name}` | Media |
+| GET | `/api/runs/{id}/persons/{track_id}` | A tracked person's profile: every check with its photo, and counts per class |
+| POST | `/api/runs/{id}/rerun` | JSON `{"settings": "current" or "original", "api_key"?}`: inspect the run's video again as a new run |
 | DELETE | `/api/runs/{id}` | Delete a finished run |
 | GET · PUT · DELETE | `/api/dev/tuning` | Read, save (JSON body) or reset the developer settings |
 | POST | `/api/dev/try` | Multipart: `item`, `tuning?` (JSON), `api_key?`, and `image` or `run_id` + `folder` + `name`. Returns each step of one check. |
@@ -171,7 +173,7 @@ app/
     dev_settings.py     saved developer settings (runs/_dev/tuning.json)
   api/deps.py           dependency providers
   api/routes/           config.py, runs.py, dev.py
-  static/               index.html, styles.css, js/ (api, ui, charts, lightbox, views/: newRun, runView, devView)
+  static/               index.html, styles.css, js/ (api, ui, charts, lightbox, profile, views/: newRun, runView, devView)
 ppe/                    detection pipeline (shared with the command line)
   config.py             PPE items and pipeline settings
   tuning.py             developer settings: prompts, decision rules, requests, tracking (validated)

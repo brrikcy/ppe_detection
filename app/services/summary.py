@@ -15,7 +15,9 @@ from collections import Counter
 from ppe.analyzer import WorkerResult, item_name
 from ppe.status import CONFIRM_CHECKS, VOTE_WINDOW, PersonStatus
 
-from ..schemas.runs import PersonSummary, RunSummary, TimelinePoint, TypeCount, ViolationEvent
+from ..schemas.runs import (
+    PersonCheck, PersonDetail, PersonSummary, RunSummary, TimelinePoint, TypeCount, ViolationEvent,
+)
 
 VERDICTS = {"ok", "violation", "unverified", "pending"}  # states of a check that reached Moondream
 
@@ -261,4 +263,46 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
         events=events,
         tracked=any(w.get("track_id") is not None for e in timeline for w in e["workers"]),
         people=build_people(timeline, available_photos, events),
+    )
+
+
+OK_LABEL, FAILED_LABEL = "PPE OK", "Check failed"
+
+
+def check_labels(w: dict) -> list[str]:
+    """What one check found, as classes: missing items, items not visible, or PPE OK."""
+    if w.get("check_failed"):
+        return [FAILED_LABEL]
+    labels = list(w["violations"]) + [f"{item_name(i)} not visible" for i in w.get("unverified", [])]
+    return labels or [OK_LABEL]
+
+
+def build_person_detail(timeline: list[dict], track_id: int, available_snapshots: set[str] | None = None,
+                        available_frames: set[str] | None = None, available_photos: set[str] | None = None,
+                        vote_window: int = VOTE_WINDOW, confirm_checks: int = CONFIRM_CHECKS) -> PersonDetail | None:
+    """One person's profile; None if they were never checked."""
+    timeline = with_status(timeline, vote_window, confirm_checks)
+    person = next((p for p in build_people(timeline, available_photos) if p.id == track_id), None)
+    if person is None:
+        return None
+    checks, classes = [], Counter()
+    for entry in timeline:
+        for i, w in enumerate(entry["workers"]):
+            if w.get("track_id") != track_id or check_state(w) in ("too_far", "new"):
+                continue
+            labels = check_labels(w)
+            classes.update(labels)
+            snap, frame = snapshot_name(entry["frame"], i), frame_name(entry["frame"])
+            checks.append(PersonCheck(
+                time_sec=entry["time_sec"], frame=entry["frame"], arrival=entry.get("arrival", False),
+                labels=labels, violations=w["violations"], status=check_state(w),
+                snapshot=snap if available_snapshots is None or snap in available_snapshots else None,
+                frame_image=frame if available_frames is None or frame in available_frames else None))
+    # Classes in a stable order: OK first, then violations, not visible, failed.
+    order = lambda k: (k != OK_LABEL, k == FAILED_LABEL, k.endswith("not visible"), k)  # noqa: E731
+    return PersonDetail(
+        person=person,
+        classes=[TypeCount(label=k, count=classes[k]) for k in sorted(classes, key=order)],
+        checks=checks,
+        crops_for_all_checks=all(c.snapshot for c in checks if c.status != "failed") if checks else True,
     )

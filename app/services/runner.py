@@ -34,6 +34,7 @@ PeopleFactory = Callable[[float], object]  # fps -> person tracker; None = YOLO 
 PREVIEW_MAX_WIDTH = 1280
 SNAPSHOT_MAX_HEIGHT = 320
 PROGRESS_SAVE_INTERVAL_SEC = 0.5
+PREVIEW_INTERVAL_SEC = 0.4  # live preview refresh while frames are written
 
 
 def default_analyzer_factory(config: Config) -> PPEAnalyzer:
@@ -114,11 +115,32 @@ class RunRunner:
             with self._live_lock:
                 self._live[run_id].append(entry)
 
+        last_preview = 0.0
+
+        def on_frame(idx: int, annotated) -> None:
+            # The live page shows the annotated video as it's written, not just one still per check.
+            nonlocal last_preview
+            now = time.monotonic()
+            if now - last_preview < PREVIEW_INTERVAL_SEC:
+                return
+            last_preview = now
+            try:
+                self._write_preview(paths.preview, annotated)
+            except OSError:
+                log.debug("Couldn't update the live preview", exc_info=True)
+
+        def on_check(idx: int, workers: int) -> None:
+            # Moondream can take a while; the live page says what it's waiting for.
+            progress.checking = workers
+            if workers:
+                progress.frames_done = max(progress.frames_done, idx)
+            self.store.update(run_id, progress=progress)
+
         analyzer = self.analyzer_factory(config)
         try:
             process_video(paths.input(), paths.output, analyzer, max_seconds=opts.max_seconds,
                           on_progress=on_progress, on_analysed=on_analysed,
-                          people_factory=self.people_factory)
+                          people_factory=self.people_factory, on_frame=on_frame, on_check=on_check)
             progress.frames_done = progress.frames_total = max(progress.frames_done, 1)
             self.store.update(run_id, status=RunStatus.completed, progress=progress,
                               finished_at=datetime.now(timezone.utc))
@@ -150,9 +172,16 @@ class RunRunner:
             violation_copy.parent.mkdir(exist_ok=True)
             cv2.imwrite(str(violation_copy), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if update_preview:
-            tmp = path.with_name("preview.tmp.jpg")
-            cv2.imwrite(str(tmp), img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            replace_with_retry(tmp, path)
+            RunRunner._write_preview(path, img)
+
+    @staticmethod
+    def _write_preview(path, img) -> None:
+        h, w = img.shape[:2]
+        if w > PREVIEW_MAX_WIDTH:
+            img = cv2.resize(img, (PREVIEW_MAX_WIDTH, int(h * PREVIEW_MAX_WIDTH / w)))
+        tmp = path.with_name("preview.tmp.jpg")
+        cv2.imwrite(str(tmp), img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        replace_with_retry(tmp, path)
 
     @staticmethod
     def _save_people(folder, frame, results: list[WorkerResult], best_area: dict[int, int]) -> None:
@@ -178,8 +207,9 @@ class RunRunner:
     @staticmethod
     def _save_snapshots(folder, frame_idx: int, frame, results: list[WorkerResult]) -> None:
         h, w = frame.shape[:2]
+        # Every check that reached Moondream, so each person's profile can show all their crops.
         for i, r in enumerate(results):
-            if r.ok:
+            if r.too_small or r.pending or r.check_failed:
                 continue
             x1, y1, x2, y2 = r.box
             pad_x, pad_y = int((x2 - x1) * 0.1), int((y2 - y1) * 0.1)

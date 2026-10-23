@@ -3,6 +3,7 @@
 import { api, ServerUnreachable } from "../api.js";
 import { timelineChart } from "../charts.js";
 import { openLightbox } from "../lightbox.js";
+import { openProfile } from "../profile.js";
 import { fmt, h, icons, plural, statusPill } from "../ui.js";
 
 const POLL_MS = 1000;
@@ -72,7 +73,69 @@ function header(run, actions = []) {
       h("span", { class: "chip" }, m.key_source === "server" ? "Server API key" : "Entered API key"),
       m.moondream_endpoint ? h("span", { class: "chip", title: `Endpoint: ${m.moondream_endpoint}` },
         `Model: ${m.options.tuning.moondream_model}`) : null,
-      customChip(m.options.tuning)));
+      customChip(m.options.tuning),
+      m.rerun_of ? h("a", { class: "chip chip-link", href: `#run/${encodeURIComponent(m.rerun_of)}` }, "Re-run of an earlier run") : null));
+}
+
+// "Run again": inspect the same video as a new run, with the current developer settings
+// or the ones this run used. The panel asks for a key only if the server has none.
+function rerunButton(run) {
+  const wrap = h("div", { class: "rerun" });
+  const btn = h("button", { class: "btn", type: "button", "aria-expanded": "false", onclick: toggle }, "Run again");
+  let panel = null;
+
+  async function toggle() {
+    if (panel) return closePanel();
+    const [config, dev] = await Promise.all([api.config(), api.dev.get().catch(() => null)]);
+    const n = dev?.changes.length ?? 0;
+    const radio = (value, label, note, checked) => h("label", { class: "rerun-opt" },
+      h("input", { type: "radio", name: "rerun-settings", value, checked }),
+      h("span", {}, h("b", {}, label), h("span", { class: "hint" }, note)));
+    const key = h("input", { class: "input", type: "password", id: "rerun-key", autocomplete: "off",
+      placeholder: config.server_key_configured ? "Empty = the server's key" : "Moondream API key" });
+    const error = h("p", { class: "form-error", hidden: true });
+    const start = h("button", { class: "btn btn-primary", type: "button", onclick: go }, "Start");
+    panel = h("div", { class: "rerun-panel card", role: "dialog", "aria-label": "Run this video again" },
+      h("h3", {}, "Run this video again"),
+      h("p", { class: "hint" }, "A new run with the same PPE items, check interval and time limit. This run stays as it is."),
+      h("fieldset", { class: "rerun-opts" }, h("legend", { class: "label" }, "Settings"),
+        radio("current", "Current developer settings",
+          n ? `${n} change${n === 1 ? "" : "s"} from the defaults, as saved now` : "The defaults (nothing changed)", true),
+        radio("original", "This run's settings", "Exactly as this run was made", false)),
+      h("label", { class: "label", for: "rerun-key" }, "Moondream API key"), key,
+      error,
+      h("div", { class: "rerun-actions" }, h("button", { class: "btn btn-ghost", type: "button", onclick: closePanel }, "Cancel"), start));
+    wrap.append(panel);
+    btn.setAttribute("aria-expanded", "true");
+    document.addEventListener("keydown", onKey);
+    panel.querySelector("input[type=radio]:checked").focus();
+
+    async function go() {
+      error.hidden = true;
+      start.disabled = true;
+      start.textContent = "Checking key…";
+      try {
+        const settings = panel.querySelector("input[name=rerun-settings]:checked").value;
+        const created = await api.rerun(run.meta.id, { settings, api_key: key.value.trim() || null });
+        closePanel();
+        location.hash = `#run/${encodeURIComponent(created.meta.id)}`;
+      } catch (e) {
+        error.textContent = e.message;
+        error.hidden = false;
+        start.disabled = false;
+        start.textContent = "Start";
+      }
+    }
+  }
+  function onKey(e) { if (e.key === "Escape") closePanel(); }
+  function closePanel() {
+    panel?.remove();
+    panel = null;
+    btn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("keydown", onKey);
+  }
+  wrap.append(btn);
+  return wrap;
 }
 
 // Shows which developer settings this run used, when they differ from the defaults.
@@ -119,46 +182,211 @@ function notFound(message) {
 
 // ---------------------------------------------------------------- progress
 
+// While a run is processing, the page is built once and then updated in place every poll:
+// numbers change, new violations and people slide in, and the preview swaps only once the
+// next frame has loaded, so nothing flickers or jumps.
 function renderProgress(root, run) {
-  const m = run.meta;
-  const pct = Math.round(run.progress_fraction * 100);
-  const s = run.summary;
   let page = root.querySelector("[data-view=progress]");
-  if (!page) {
-    page = h("div", { class: "page", "data-view": "progress" });
+  if (!page || page.dataset.run !== run.meta.id) {
+    page = buildLive(run);
     root.replaceChildren(page);
   }
-  const previewImg = page.querySelector(".preview img");
-  const preview = m.progress.frames_analysed > 0
-    ? (previewImg ?? h("img", { alt: "Latest checked frame with detections" }))
-    : h("div", { class: "wait" }, m.status === "queued" ? "Waiting for the previous run to finish…" : "Checking the first frame…");
-  if (preview.tagName === "IMG") preview.src = api.urls.preview(m.id);
+  page.update(run);
+}
 
-  const totalChecks = Math.ceil((m.options.max_seconds ? Math.min(m.options.max_seconds, m.video.duration_sec) : m.video.duration_sec) / m.options.analysis_interval_sec);
-  // replaceChildren() would print a null child as the text "null", so drop it first.
-  page.replaceChildren(...[
-    header(run),
-    h("section", { class: "card progress-card" },
-      h("div", { class: "preview" }, preview),
-      h("div", { class: "stats" },
-        h("span", { class: "eyebrow" }, m.status === "queued" ? "Queued" : "Processing"),
-        h("div", { class: "big-pct" }, `${pct}%`),
-        h("div", { class: "bar" }, h("i", { style: `width:${pct}%` })),
-        h("dl", { class: "statlist" },
-          h("dt", {}, "Frames written"), h("dd", {}, `${m.progress.frames_done.toLocaleString()} / ${m.progress.frames_total.toLocaleString()}`),
-          h("dt", {}, "Frames checked"), h("dd", {}, `${m.progress.frames_analysed} / ~${totalChecks}`),
-          h("dt", {}, "Workers seen (peak)"), h("dd", {}, s ? s.peak_workers : "–"),
-          h("dt", {}, "Violation incidents"), h("dd", {}, s ? String(s.events.length) : "–"),
-          h("dt", {}, "Failed checks"), h("dd", {}, s ? String(s.failed_checks ?? 0) : "–")),
+// Swaps an <img> to `url` once the new image has loaded, instead of blanking while it loads.
+function swapImage(img, url) {
+  const next = new Image();
+  next.onload = () => { img.src = url; img.classList.add("is-loaded"); };
+  next.src = url;
+}
+
+function bump(el, text) {
+  if (el.textContent === text) return;
+  el.textContent = text;
+  el.classList.remove("bump");
+  void el.offsetWidth; // restart the animation
+  el.classList.add("bump");
+}
+
+function buildLive(run) {
+  const m = run.meta;
+  const id = m.id;
+  const duration = m.options.max_seconds ? Math.min(m.options.max_seconds, m.video.duration_sec) : m.video.duration_sec;
+  const page = h("div", { class: "page", "data-view": "progress", "data-run": id });
+  const headSlot = h("div");
+
+  // Preview with a live badge
+  const previewImg = h("img", { alt: "Latest checked frame with detections" });
+  const waiting = h("div", { class: "wait" });
+  const clock = h("span", { class: "num" });
+  const badge = h("span", { class: "live-badge" }, h("i"), h("span", { class: "live-text" }, "Live"), clock);
+  const preview = h("div", { class: "preview live-preview" }, previewImg, waiting, badge);
+
+  // Progress and counters
+  const stage = h("span", { class: "eyebrow" });
+  const pct = h("div", { class: "big-pct num" });
+  const bar = h("i");
+  const eta = h("p", { class: "hint live-eta" });
+  const activity = h("p", { class: "live-activity" });
+  const counter = (label) => {
+    const value = h("b", { class: "num" }, "0");
+    const note = h("span");
+    return { value, note, el: h("div", { class: "live-stat" }, h("span", { class: "eyebrow" }, label), value, note) };
+  };
+  const cViol = counter("Violations"), cPeople = counter("People"), cChecks = counter("Worker checks"), cComp = counter("Compliance");
+  cViol.el.classList.add("is-bad");
+
+  // Chart, violations feed, people strip
+  const chartSlot = h("div", { class: "chart-wrap" });
+  const chartCard = h("section", { class: "card card-pad" },
+    h("div", { class: "card-head" },
+      h("div", {}, h("h2", {}, "Compliance over time"), h("p", {}, "Workers per checked frame, filled in as the video is inspected.")),
+      h("div", { class: "legend" },
+        h("span", {}, h("i", { style: "background:var(--good)" }), "PPE OK"),
+        h("span", {}, h("i", { style: "background:var(--critical)" }), "PPE violation"),
+        h("span", {}, h("i", { style: "background:var(--warning)" }), "Item not visible"),
+        h("span", {}, h("i", { style: "background:var(--muted)" }), "Not checked"))),
+    chartSlot);
+  const feed = h("div", { class: "events live-feed" });
+  const feedEmpty = h("div", { class: "empty-note" }, h("span", { html: icons.check }),
+    "No violations so far. Every worker checked so far has the required PPE.");
+  const feedCount = h("span", { class: "pill failed", hidden: true });
+  const feedCard = h("section", { class: "card card-pad" },
+    h("div", { class: "card-head" },
+      h("div", {}, h("h2", {}, "Violations found so far ", feedCount),
+        h("p", {}, "Newest first. A violation appears once it has been seen in two checks in a row. Click one to open it."))),
+    feedEmpty, feed);
+  const strip = h("div", { class: "live-people" });
+  const stripCard = h("section", { class: "card card-pad" },
+    h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "People found so far"),
+      h("p", {}, "Each worker keeps one ID. Click a person to see every photo of them taken so far."))),
+    strip);
+
+  page.append(headSlot,
+    h("section", { class: "card progress-card" }, preview,
+      h("div", { class: "stats" }, stage, pct, h("div", { class: "bar" }, bar), eta, activity,
+        h("div", { class: "live-stats" }, cViol.el, cPeople.el, cChecks.el, cComp.el),
         h("p", { class: "hint" }, "You can leave this page; the run keeps going and appears in the sidebar."))),
-    s && s.timeline.length ? timelineCard(s, m, null) : null].filter(Boolean));
+    chartCard, feedCard, stripCard);
+
+  const cards = new Map(); // incident key -> {el, img, time}
+  const chips = new Map(); // person id -> {el, status}
+  let lastFrames = -1, lastPoints = -1, lastStatus = null;
+  const started = { t: performance.now(), f: run.progress_fraction };
+
+  page.update = (run) => {
+    const m = run.meta;
+    const s = run.summary;
+    if (m.status !== lastStatus) {
+      headSlot.replaceChildren(header(run));
+      lastStatus = m.status;
+    }
+    const frac = run.progress_fraction;
+    const queued = m.status === "queued";
+    stage.textContent = queued ? "Queued" : "Inspecting";
+    pct.textContent = `${Math.round(frac * 100)}%`;
+    bar.style.width = `${frac * 100}%`;
+    clock.textContent = ` ${fmt.time(frac * duration)} / ${fmt.time(duration)}`;
+    badge.hidden = queued || !m.progress.frames_done;
+    // Time left, from the speed since this page opened.
+    const done = frac - started.f, secs = (performance.now() - started.t) / 1000;
+    eta.textContent = queued ? "Waiting for the previous run to finish."
+      : done > 0.03 && secs > 4 ? `About ${fmt.duration((secs / done) * (1 - frac))} left`
+        : "Estimating time left…";
+
+    // The preview is refreshed as frames are written, so it plays along with the inspection.
+    if (m.progress.frames_done !== lastFrames && m.progress.frames_done > 0) {
+      lastFrames = m.progress.frames_done;
+      swapImage(previewImg, api.urls.preview(id));
+      waiting.hidden = true;
+    }
+    // What the pipeline is doing right now, so a slow Moondream answer doesn't look like a freeze.
+    const checking = m.progress.checking ?? 0;
+    activity.hidden = queued || lastFrames < 1;
+    activity.classList.toggle("is-checking", checking > 0);
+    activity.replaceChildren(h("span", { class: "spinner small", "aria-hidden": "true" }),
+      checking ? `Asking Moondream about ${plural(checking, "worker")} at ${fmt.time(frac * duration)}…`
+        : "Tracking workers and drawing the video…");
+    if (lastFrames < 1) {
+      waiting.hidden = false;
+      waiting.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), h("span", {},
+        queued ? "Waiting for the previous run to finish…"
+          : "Starting up: loading the person detector and checking the first workers with Moondream…"));
+    }
+    if (!s) return;
+
+    bump(cViol.value, String(s.events.length));
+    cViol.note.textContent = s.events.length ? `${plural(s.violation_checks, "worker check")}` : "none yet";
+    cViol.el.classList.toggle("has-value", s.events.length > 0);
+    const flagged = s.people.filter((p) => p.state === "flagged").length;
+    bump(cPeople.value, String(s.people.length));
+    cPeople.note.textContent = flagged ? `${flagged} flagged` : "none flagged";
+    bump(cChecks.value, String(s.worker_checks));
+    cChecks.note.textContent = `${plural(s.frames_analysed, "frame")}`;
+    bump(cComp.value, s.compliance_rate == null ? "–" : `${Math.round(s.compliance_rate * 100)}%`);
+    cComp.note.textContent = "of judged checks";
+
+    if (s.timeline.length !== lastPoints) {
+      lastPoints = s.timeline.length;
+      timelineChart(chartSlot, s.timeline, { duration, interval: m.options.analysis_interval_sec });
+    }
+
+    // Violations: add new incidents at the top, update ones that are still going.
+    feedEmpty.hidden = s.events.length > 0;
+    feedCount.hidden = !s.events.length;
+    feedCount.textContent = String(s.events.length);
+    const items = eventItems(run, [...s.events].reverse());
+    items.forEach((e, i) => {
+      const key = `${e.track_id}-${e.time_sec}`;
+      let c = cards.get(key);
+      if (!c) {
+        const img = h("img", { alt: `Worker at ${fmt.timePrecise(e.time_sec)}` });
+        const time = h("span", { class: "time" });
+        const tags = h("div", { class: "tags" });
+        const el = h("button", { class: "event is-new", type: "button", title: "Open image" },
+          h("div", { class: "thumb" }, img), h("div", { class: "body" }, time, tags));
+        c = { el, img, time, tags, snap: null };
+        cards.set(key, c);
+      }
+      c.el.onclick = () => openLightbox(items, i);
+      c.time.textContent = [e.track_id != null ? `#${e.track_id}` : null, incidentTime(e),
+        e.checks > 1 ? plural(e.checks, "check") : null].filter(Boolean).join(" · ");
+      if (c.tags.textContent !== e.violations.join("")) c.tags.replaceChildren(...e.violations.map((v) => h("span", { class: "tag-bad" }, v)));
+      if (e.cropUrl && e.cropUrl !== c.snap) { c.snap = e.cropUrl; swapImage(c.img, e.cropUrl); }
+      if (feed.children[i] !== c.el) feed.insertBefore(c.el, feed.children[i] ?? null);
+    });
+
+    // People: one chip each, in order of appearance; status colour changes in place.
+    const order = [...s.people].sort((a, b) => a.first_seen_sec - b.first_seen_sec || a.id - b.id);
+    for (const p of order) {
+      let c = chips.get(p.id);
+      if (!c) {
+        const img = h("img", { alt: `Person ${p.id}` });
+        const status = h("span", { class: "status" });
+        const el = h("button", { type: "button", class: "live-person is-new", title: `Open person #${p.id}`,
+          onclick: () => openProfile(run, p.id) },
+          h("div", { class: "photo" }, img, h("span", { class: "pid" }, `#${p.id}`)), status);
+        c = { el, img, status, checks: -1 };
+        chips.set(p.id, c);
+        strip.append(el);
+      }
+      c.el.className = `live-person is-${{ flagged: "bad", unverified: "unverified", brief: "brief", ok: "ok" }[p.state] ?? "ok"}${c.el.classList.contains("is-new") ? " is-new" : ""}`;
+      c.status.textContent = p.state === "flagged" ? p.status_label.replace(/^PPE Violation \(\d+\) - /, "Missing: ") : p.status_label;
+      // The photo is replaced when a bigger view of the person is saved; refresh it as checks come in.
+      if (p.photo && p.checks !== c.checks) { c.checks = p.checks; swapImage(c.img, `${api.urls.person(id, p.photo)}?v=${p.checks}`); }
+    }
+    if (!s.people.length && !strip.children.length) strip.replaceChildren(h("p", { class: "hint" }, "Nobody checked yet."));
+    else strip.querySelector(":scope > p.hint")?.remove();
+  };
+  return page;
 }
 
 // ---------------------------------------------------------------- failed
 
 function renderFailed(root, run, { onDeleted }) {
   root.replaceChildren(h("div", { class: "page" },
-    header(run, [deleteButton(run, onDeleted)]),
+    header(run, [rerunButton(run), deleteButton(run, onDeleted)]),
     h("div", { class: "alert", role: "alert" },
       h("h3", {}, "This run failed"),
       h("p", {}, run.meta.error || "Unknown error.")),
@@ -312,14 +540,8 @@ function peopleCard(run, s, video) {
   const statusClass = { flagged: "bad", unverified: "unverified", brief: "brief", ok: "ok" };
   const cardClass = { flagged: "bad", unverified: "unverified", brief: "brief", ok: "ok" };
 
-  function open(p) {
-    const events = s.events.filter((e) => e.track_id === p.id);
-    const items = events.length ? eventItems(run, events) : [{
-      track_id: p.id, time_sec: p.first_seen_sec, violations: [],
-      cropUrl: p.photo ? api.urls.person(run.meta.id, p.photo) : null, frameUrl: null,
-    }];
-    openLightbox(items, 0, { onShowInVideo: (e) => seekTo(video, e.time_sec) });
-  }
+  // The card opens the person's profile: every photo of them, with counts per class.
+  const open = (p) => openProfile(run, p.id, { onShowInVideo: (e) => seekTo(video, e.time_sec) });
 
   function draw() {
     filters.replaceChildren(...[["all", `All (${s.people.length})`],
@@ -342,7 +564,7 @@ function peopleCard(run, s, video) {
         ok: p.violation_checks ? `${plural(p.violation_checks, "single-check misread")} ignored by the vote` : null,
       }[st];
       return h("button", { class: `person is-${cardClass[st]}`, type: "button",
-        title: `Open images of person #${p.id}`, onclick: () => open(p) },
+        title: `Open the profile of person #${p.id}`, onclick: () => open(p) },
         h("div", { class: "photo" },
           p.photo ? h("img", { src: api.urls.person(run.meta.id, p.photo), alt: `Person ${p.id}`, loading: "lazy" }) : null,
           h("span", { class: "pid" }, `#${p.id}`)),
@@ -397,6 +619,7 @@ function renderDashboard(root, run, { onDeleted }) {
     header(run, [
       h("a", { class: "btn", href: api.urls.video(m.id, true), download: "" }, h("span", { html: icons.download, style: "display:inline-flex" }), "Video"),
       h("a", { class: "btn", href: api.urls.report(m.id), download: "" }, h("span", { html: icons.download, style: "display:inline-flex" }), "Report"),
+      rerunButton(run),
       deleteButton(run, onDeleted),
     ]),
     h("div", { class: "kpis" },

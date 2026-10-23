@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Annotated
 
 import cv2
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
@@ -16,14 +18,14 @@ from ppe.config import parse_required
 
 from ...core.settings import Settings
 from ...schemas.runs import (
-    KeySource, RunDetail, RunListItem, RunMeta, RunOptions, RunStatus, VideoInfo,
+    KeySource, PersonDetail, RunDetail, RunListItem, RunMeta, RunOptions, RunStatus, VideoInfo,
 )
 from ...services.keys import (
     KeyRejected, KeyVerifier, MissingKey, ModelRejected, MoondreamUnreachable, resolve_key,
 )
 from ...services.run_store import RunNotFound, RunStore
 from ...services.runner import RunRunner
-from ...services.summary import build_summary
+from ...services.summary import build_person_detail, build_summary
 from ...services.media import VideoConverter
 from ...services.dev_settings import DevSettingsStore
 from ..deps import get_dev_settings, get_key_verifier, get_runner, get_settings, get_store, get_video_converter
@@ -103,8 +105,60 @@ async def create_run(
                              tuning=dev.get())
     except (MissingKey, ValueError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+    await _check_key(verify, key, key_source)
 
-    # Check the key before accepting the upload, so a wrong key never becomes a failed run.
+    suffix = Path(video.filename or "").suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                            f"Unsupported file type. Use one of: {', '.join(sorted(ALLOWED_SUFFIXES))}")
+    return await _start_run(store, runner, settings, Path(video.filename or "video").stem[:120], key, key_source,
+                            options, suffix, lambda dest: _save_upload(video, dest, settings.max_upload_mb * CHUNK))
+
+
+class RerunRequest(BaseModel):
+    api_key: str | None = None
+    # "current": the developer settings saved now; "original": the settings the run used.
+    settings: str = "current"
+
+
+@router.post("/{run_id}/rerun", response_model=RunDetail, status_code=status.HTTP_201_CREATED)
+async def rerun(
+    run_id: str,
+    body: RerunRequest,
+    store: Store,
+    runner: Runner,
+    settings: Annotated[Settings, Depends(get_settings)],
+    verify: Annotated[KeyVerifier, Depends(get_key_verifier)],
+    dev: Annotated[DevSettingsStore, Depends(get_dev_settings)],
+) -> RunDetail:
+    """Inspect a run's video again, as a new run: same PPE items, interval and time limit,
+    with the current developer settings or the ones the run used."""
+    meta = _get_meta(store, run_id)
+    source = store.paths(run_id).input()
+    if source is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This run's video is no longer on disk")
+    if body.settings not in ("current", "original"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "settings must be current or original")
+    try:
+        key, key_source = resolve_key(body.api_key, settings)
+    except MissingKey as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+    await _check_key(verify, key, key_source)
+    options = meta.options.model_copy(update={"tuning": dev.get() if body.settings == "current" else meta.options.tuning})
+    return await _start_run(store, runner, settings, meta.name, key, key_source, options, source.suffix,
+                            lambda dest: _link_or_copy(source, dest), rerun_of=run_id)
+
+
+def _link_or_copy(src: Path, dest: Path) -> None:
+    """Re-inspecting doesn't change the video, so share the file when the filesystem allows it."""
+    try:
+        os.link(src, dest)
+    except OSError:
+        shutil.copy2(src, dest)
+
+
+async def _check_key(verify: KeyVerifier, key: str, key_source: KeySource) -> None:
+    """Check the key before accepting a run, so a wrong key never becomes a failed run."""
     try:
         await run_in_threadpool(verify, key)
     except KeyRejected as exc:
@@ -115,29 +169,33 @@ async def create_run(
     except MoondreamUnreachable as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
 
-    suffix = Path(video.filename or "").suffix.lower()
-    if suffix not in ALLOWED_SUFFIXES:
-        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                            f"Unsupported file type. Use one of: {', '.join(sorted(ALLOWED_SUFFIXES))}")
 
+async def _start_run(store: RunStore, runner: RunRunner, settings: Settings, name: str, key: str,
+                     key_source: KeySource, options: RunOptions, suffix: str, write_input,
+                     rerun_of: str | None = None) -> RunDetail:
+    """Creates the run folder, puts the video in it with `write_input(dest)`, and queues the run."""
     run_id = store.new_id()
     paths = store.create_dir(run_id)
     try:
         dest = paths.root / f"input{suffix}"
-        await run_in_threadpool(_save_upload, video, dest, settings.max_upload_mb * CHUNK)
+        await run_in_threadpool(write_input, dest)
         info = await run_in_threadpool(_probe, dest)
     except ValueError as exc:
         shutil.rmtree(paths.root, ignore_errors=True)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Couldn't use this video: {exc}")
+    except BaseException:
+        shutil.rmtree(paths.root, ignore_errors=True)
+        raise
 
     meta = RunMeta(
         id=run_id,
         moondream_endpoint=settings.moondream_endpoint,
-        name=Path(video.filename or "video").stem[:120],
+        name=name,
         created_at=datetime.now(timezone.utc),
         key_source=key_source,
         options=options,
         video=info,
+        rerun_of=rerun_of,
     )
     store.save(meta)
     runner.submit(run_id, key)
@@ -166,18 +224,39 @@ def get_run(run_id: str, store: Store, runner: Runner,
             converter: Annotated[VideoConverter, Depends(get_video_converter)]) -> RunDetail:
     meta = _get_meta(store, run_id)
     paths = store.paths(run_id)
-    timeline = None
     if meta.status == RunStatus.completed:
         converter.warm(paths.output, audio_source=paths.input(), max_seconds=meta.options.max_seconds)
-        report = store.read_report(run_id)
-        timeline = report["timeline"] if report else None
-    elif meta.status == RunStatus.running:
-        timeline = runner.live_timeline(run_id)
+    timeline = _timeline(store, runner, meta)
     tun = meta.options.tuning
     summary = (build_summary(timeline, _image_names(paths.snapshots), _image_names(paths.frames),
                              _image_names(paths.people), tun.vote_window, tun.confirm_checks)
                if timeline is not None else None)
     return RunDetail(meta=meta, progress_fraction=_progress_fraction(meta), summary=summary)
+
+
+def _timeline(store: RunStore, runner: RunRunner, meta: RunMeta) -> list[dict] | None:
+    """The report's timeline for a finished run, the live one while it runs."""
+    if meta.status == RunStatus.completed:
+        report = store.read_report(meta.id)
+        return report["timeline"] if report else None
+    if meta.status == RunStatus.running:
+        return runner.live_timeline(meta.id)
+    return None
+
+
+@router.get("/{run_id}/persons/{track_id}", response_model=PersonDetail)
+def get_person(run_id: str, track_id: int, store: Store, runner: Runner) -> PersonDetail:
+    """A tracked person's profile: every check of them with its crop, and counts per class."""
+    meta = _get_meta(store, run_id)
+    paths = store.paths(run_id)
+    timeline = _timeline(store, runner, meta)
+    tun = meta.options.tuning
+    detail = (build_person_detail(timeline, track_id, _image_names(paths.snapshots), _image_names(paths.frames),
+                                  _image_names(paths.people), tun.vote_window, tun.confirm_checks)
+              if timeline is not None else None)
+    if detail is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Person not found")
+    return detail
 
 
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)

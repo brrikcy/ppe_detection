@@ -35,6 +35,8 @@ def process_video(
     on_progress: Callable[[int, int], None] | None = None,
     on_analysed: Callable[..., None] | None = None,
     people_factory: Callable[[float], object] | None = None,
+    on_frame: Callable[[int, "cv2.typing.MatLike"], None] | None = None,
+    on_check: Callable[[int, int], None] | None = None,
 ) -> dict:
     """Annotate `input_path` into `output_path` and return the report dict.
 
@@ -49,6 +51,8 @@ def process_video(
     on_progress(frames_done, total_frames) is called periodically while frames are written.
     on_analysed(timeline_entry, frame_bgr, results, display) is called after each check frame,
     with the raw check results and the voted boxes drawn in the video.
+    on_frame(frame_index, annotated_bgr) is called for every frame written (for live previews).
+    on_check(frame_index, workers) is called when a PPE check starts (workers > 0) and ends (0).
     """
     input_path, output_path = Path(input_path), Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,10 +132,15 @@ def process_video(
             results: dict[int, WorkerResult] = {}
             if due:
                 rgb = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                if on_check:
+                    on_check(idx, len(due))
                 try:
                     checked = analyzer.check_workers(rgb, [p.box for p in due], [p.box for p in live])
                 except (AuthError, ModelError):
                     raise  # every later check would fail the same way
+                finally:
+                    if on_check:
+                        on_check(idx, 0)
                 for p, r in zip(due, checked):
                     r.track_id = p.id
                     results[p.id] = r
@@ -176,7 +185,10 @@ def process_video(
                 log.info("frame %d (%.1fs)%s: %d workers, %d with violations", idx, idx / fps,
                          " arrival" if arrival else "", len(current), sum(bool(r.violations) for r in current))
 
-            writer.write(draw_results(frame, display))
+            annotated = draw_results(frame, display)
+            writer.write(annotated)
+            if on_frame:
+                on_frame(idx, annotated)
             idx += 1
             if on_progress and (idx % 10 == 0 or idx == total):
                 on_progress(idx, total)

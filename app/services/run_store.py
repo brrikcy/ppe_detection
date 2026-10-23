@@ -7,7 +7,7 @@ Layout:
         annotated.mp4    output video
         annotated.json   full per-frame report from ppe.video
         preview.jpg      latest analysed frame, annotated (updated while running)
-        snapshots/       crops of workers with violations
+        snapshots/       crop of each checked worker, per check
         frames/          full annotated frames that contain a violation
         people/          best (largest) crop of each tracked person, <track_id>.jpg
 """

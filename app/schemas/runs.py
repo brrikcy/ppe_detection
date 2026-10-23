@@ -42,6 +42,7 @@ class Progress(BaseModel):
     frames_done: int = 0
     frames_total: int = 0
     frames_analysed: int = 0
+    checking: int = 0  # workers whose PPE check is in progress right now (live view)
 
     @property
     def fraction(self) -> float:
@@ -59,6 +60,7 @@ class RunMeta(BaseModel):
     error: str | None = None
     key_source: KeySource
     moondream_endpoint: str | None = None  # where this run's Moondream requests went (None: older runs)
+    rerun_of: str | None = None  # id of the run whose video this run re-inspected
     options: RunOptions
     video: VideoInfo
     progress: Progress = Field(default_factory=Progress)
@@ -112,6 +114,28 @@ class PersonSummary(BaseModel):
     missing: list[TypeCount]  # per violation label: single checks it was missing in
     latest_label: str  # status after their last check
     photo: str | None  # file name under /people/
+
+
+class PersonCheck(BaseModel):
+    """One check of one person, for their profile."""
+
+    time_sec: float
+    frame: int
+    arrival: bool = False
+    labels: list[str]  # what this check found: "PPE OK", "No Helmet", "Helmet not visible", "Check failed"
+    violations: list[str]
+    status: str  # the person's voted state after this check: ok, violation, unverified, pending, failed
+    snapshot: str | None  # crop of the worker, file name under /snapshots/
+    frame_image: str | None = None  # whole annotated frame, file name under /frames/
+
+
+class PersonDetail(BaseModel):
+    """A person's profile: every check of them, and how often each class was seen."""
+
+    person: PersonSummary
+    classes: list[TypeCount]  # per label in PersonCheck.labels, number of checks
+    checks: list[PersonCheck]
+    crops_for_all_checks: bool  # False for runs made before every check's crop was saved
 
 
 class RunSummary(BaseModel):

@@ -75,6 +75,17 @@ img, video { max-width: 100%; display: block; }
 .sidebar { display: flex; flex-direction: column; gap: 16px; padding: 20px 14px; border-right: 1px solid var(--line); background: var(--surface); overflow: hidden; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; font: 700 22px/1 var(--display); letter-spacing: .02em; }
 .brand svg { width: 26px; height: 26px; fill: var(--accent); }
+/* The main call to action: start a new inspection. */
+.new-cta { flex: none; display: flex; align-items: center; gap: 12px; min-height: 58px; padding: 8px 14px 8px 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent) 70%, var(--fg)); background: var(--accent); color: var(--accent-ink); text-decoration: none; box-shadow: 0 1px 0 rgb(255 255 255 / .5) inset, 0 4px 14px color-mix(in srgb, var(--accent) 45%, transparent); transition: transform .12s ease, box-shadow .12s ease, filter .12s; }
+.new-cta:hover { transform: translateY(-1px); filter: brightness(1.03); box-shadow: 0 1px 0 rgb(255 255 255 / .5) inset, 0 8px 22px color-mix(in srgb, var(--accent) 55%, transparent); }
+.new-cta:active { transform: none; }
+.new-cta[aria-current="page"] { outline: 2px solid var(--fg); outline-offset: 2px; }
+.new-cta-icon { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border-radius: 50%; background: var(--accent-ink); color: var(--accent); }
+.new-cta-icon svg { width: 20px; height: 20px; }
+.new-cta-text { display: grid; gap: 1px; min-width: 0; }
+.new-cta-text b { font: 700 21px/1.05 var(--display); letter-spacing: .02em; }
+.new-cta-text small { font-size: 12.5px; font-weight: 500; opacity: .75; }
+@media (prefers-reduced-motion: reduce) { .new-cta { transition: none; } .new-cta:hover { transform: none; } }
 .runs-head { display: flex; justify-content: space-between; padding: 6px 6px 0; }
 .runs-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
 .run-item { display: grid; gap: 4px; padding: 10px; border-radius: var(--r); text-decoration: none; border: 1px solid transparent; }

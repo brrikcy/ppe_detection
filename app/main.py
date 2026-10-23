@@ -24,6 +24,16 @@ from .services.runner import AnalyzerFactory, PeopleFactory, RunRunner, default_
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+class RevalidatedStaticFiles(StaticFiles):
+    """The web app's files, which browsers must re-check on every load (a cheap 304 when
+    unchanged), so an updated app is never mixed with cached scripts from an older one."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def create_app(settings: Settings | None = None,
                analyzer_factory: AnalyzerFactory = default_analyzer_factory,
                key_verifier: KeyVerifier | None = None,
@@ -53,5 +63,5 @@ def create_app(settings: Settings | None = None,
     app.include_router(runs_routes.router)
     app.include_router(dev_routes.router)
     # Registered last so /api routes take precedence.
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+    app.mount("/", RevalidatedStaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

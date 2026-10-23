@@ -10,6 +10,7 @@ const view = document.getElementById("view");
 const list = document.getElementById("runs-list");
 const count = document.getElementById("runs-count");
 const devLink = document.getElementById("dev-link");
+const newLink = document.getElementById("new-link");
 
 let cleanup = () => {};
 let sidebarTimer = null;
@@ -32,6 +33,7 @@ async function refreshSidebar() {
   }
   const route = currentRoute();
   devLink.setAttribute("aria-current", route.name === "dev" ? "page" : "false");
+  newLink.setAttribute("aria-current", route.name === "new" ? "page" : "false");
   count.textContent = runs.length ? String(runs.length) : "";
   list.replaceChildren(...(runs.length ? runs.map((r) => {
     const active = r.status === "running" || r.status === "queued";

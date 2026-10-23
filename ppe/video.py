@@ -52,16 +52,20 @@ def process_video(
         total = min(total, int(max_seconds * fps)) if total > 0 else int(max_seconds * fps)
 
     cfg = analyzer.config
+    tun = cfg.tuning
     step = max(1, int(round(cfg.analysis_interval_sec * fps)))
-    min_check_h = cfg.min_check_height_frac * height
+    min_check_h = tun.min_check_height_frac * height
     log.info("%s: %dx%d @ %.1ffps, %d frames, checking every %d frames",
              input_path.name, width, height, fps, total, step)
 
     if people_factory is None:
-        from .people import DEFAULT_MODEL, YoloPersonTracker
+        from .people import DEFAULT_MODEL, MODELS_DIR, YoloPersonTracker
 
-        people = YoloPersonTracker(fps=fps, model_path=Path(cfg.person_model or DEFAULT_MODEL),
-                                   imgsz=cfg.person_imgsz)
+        model = MODELS_DIR / tun.person_model if tun.person_model else Path(cfg.person_model or DEFAULT_MODEL)
+        people = YoloPersonTracker(fps=fps, model_path=model, imgsz=tun.detector_imgsz,
+                                   conf=tun.detector_conf, hidden_sec=tun.hidden_sec,
+                                   min_age_sec=tun.min_track_age_sec,
+                                   tracker_overrides={"new_track_thresh": tun.new_track_thresh})
     else:
         people = people_factory(fps)
     writer = FrameWriter(output_path, width, height, fps, audio_source=input_path, max_seconds=max_seconds)
@@ -79,7 +83,7 @@ def process_video(
                 break
             tracked = people.update(frame)
             for p in tracked:
-                statuses.setdefault(p.id, PersonStatus())
+                statuses.setdefault(p.id, PersonStatus(window=tun.vote_window))
             checkable = [p for p in tracked if p.box[3] - p.box[1] >= min_check_h]
             is_check = idx % step == 0
             if is_check:
@@ -161,6 +165,7 @@ def process_video(
         "frames_analysed": sum(not e["arrival"] for e in timeline),  # regular checks
         "arrival_checks": sum(e["arrival"] for e in timeline),
         "required_ppe": cfg.required_ppe,
+        "tuning": tun.model_dump(),
         "timeline": timeline,
     }
     report_path = output_path.with_suffix(".json")

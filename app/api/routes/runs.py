@@ -25,7 +25,8 @@ from ...services.run_store import RunNotFound, RunStore
 from ...services.runner import RunRunner
 from ...services.summary import build_summary
 from ...services.media import VideoConverter
-from ..deps import get_key_verifier, get_runner, get_settings, get_store, get_video_converter
+from ...services.dev_settings import DevSettingsStore
+from ..deps import get_dev_settings, get_key_verifier, get_runner, get_settings, get_store, get_video_converter
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -87,6 +88,7 @@ async def create_run(
     runner: Runner,
     settings: Annotated[Settings, Depends(get_settings)],
     verify: Annotated[KeyVerifier, Depends(get_key_verifier)],
+    dev: Annotated[DevSettingsStore, Depends(get_dev_settings)],
     video: Annotated[UploadFile, File(description="Construction-site video")],
     api_key: Annotated[str | None, Form()] = None,
     required_ppe: Annotated[str, Form(description="Comma separated, e.g. helmet,vest")] = "helmet,vest",
@@ -97,7 +99,8 @@ async def create_run(
         key, key_source = resolve_key(api_key, settings)
         options = RunOptions(required_ppe=parse_required(required_ppe),
                              analysis_interval_sec=analysis_interval_sec,
-                             max_seconds=max_seconds or None)
+                             max_seconds=max_seconds or None,
+                             tuning=dev.get())
     except (MissingKey, ValueError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
 
@@ -165,7 +168,7 @@ def get_run(run_id: str, store: Store, runner: Runner,
     elif meta.status == RunStatus.running:
         timeline = runner.live_timeline(run_id)
     summary = (build_summary(timeline, _image_names(paths.snapshots), _image_names(paths.frames),
-                             _image_names(paths.people))
+                             _image_names(paths.people), meta.options.tuning.person_flag_ratio)
                if timeline is not None else None)
     return RunDetail(meta=meta, progress_fraction=_progress_fraction(meta), summary=summary)
 

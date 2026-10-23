@@ -7,6 +7,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from ppe.tuning import Tuning
+
 
 class RunStatus(str, Enum):
     queued = "queued"
@@ -24,6 +26,8 @@ class RunOptions(BaseModel):
     required_ppe: list[str] = Field(default_factory=lambda: ["helmet", "vest"])
     analysis_interval_sec: float = Field(1.0, gt=0, le=30)
     max_seconds: float | None = Field(None, gt=0)
+    # Developer settings in force when the run was created (defaults for older runs).
+    tuning: Tuning = Field(default_factory=Tuning)
 
 
 class VideoInfo(BaseModel):
@@ -144,3 +148,18 @@ class KeyCheckResult(BaseModel):
     ok: bool
     source: KeySource | None
     message: str
+
+
+class TuningState(BaseModel):
+    active: Tuning  # applied to new runs
+    defaults: Tuning
+    changes: list[str]  # dotted names of settings that differ from the defaults
+    models: list[str]  # person-detection weights available in models/
+    default_model: str
+
+
+class TryRequestResult(BaseModel):
+    item: str
+    status: str  # present / missing / unverified
+    steps: list[dict]
+    image_size: list[int]

@@ -2,12 +2,14 @@
 
 import { api, ServerUnreachable } from "./api.js";
 import { fmt, h, plural, statusPill } from "./ui.js";
+import { renderDev } from "./views/devView.js";
 import { renderNewRun } from "./views/newRun.js";
 import { renderRun } from "./views/runView.js";
 
 const view = document.getElementById("view");
 const list = document.getElementById("runs-list");
 const count = document.getElementById("runs-count");
+const devLink = document.getElementById("dev-link");
 
 let cleanup = () => {};
 let sidebarTimer = null;
@@ -15,6 +17,7 @@ let sidebarTimer = null;
 function currentRoute() {
   const hash = location.hash.slice(1);
   if (hash.startsWith("run/")) return { name: "run", id: decodeURIComponent(hash.slice(4)) };
+  if (hash === "dev") return { name: "dev" };
   return { name: "new" };
 }
 
@@ -28,6 +31,7 @@ async function refreshSidebar() {
     return;
   }
   const route = currentRoute();
+  devLink.setAttribute("aria-current", route.name === "dev" ? "page" : "false");
   count.textContent = runs.length ? String(runs.length) : "";
   list.replaceChildren(...(runs.length ? runs.map((r) => {
     const active = r.status === "running" || r.status === "queued";
@@ -54,7 +58,9 @@ async function route() {
   const r = currentRoute();
   view.scrollTop = 0;
   try {
-    if (r.name === "run") {
+    if (r.name === "dev") {
+      cleanup = await renderDev(view);
+    } else if (r.name === "run") {
       cleanup = await renderRun(view, r.id, {
         onChanged: refreshSidebar,
         onDeleted: () => { location.hash = "#new"; refreshSidebar(); },

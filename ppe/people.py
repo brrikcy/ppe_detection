@@ -25,7 +25,8 @@ import numpy as np
 Box = tuple[int, int, int, int]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL = PROJECT_ROOT / "models" / "yolo11n.pt"
+MODELS_DIR = PROJECT_ROOT / "models"
+DEFAULT_MODEL = MODELS_DIR / "yolo11n.pt"
 MODEL_URL = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt"
 PERSON_CLASS = 0  # COCO "person"
 

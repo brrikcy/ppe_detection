@@ -42,13 +42,11 @@ def default_analyzer_factory(config: Config) -> PPEAnalyzer:
 
 class RunRunner:
     def __init__(self, store: RunStore, analyzer_factory: AnalyzerFactory = default_analyzer_factory,
-                 max_workers: int = 4, people_factory: PeopleFactory | None = None,
-                 person_model: Path | None = None):
+                 people_factory: PeopleFactory | None = None, person_model: Path | None = None):
         self.store = store
         self.analyzer_factory = analyzer_factory
         self.people_factory = people_factory
         self.person_model = person_model
-        self.max_workers = max_workers
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="run")
         self._live: dict[str, list[dict]] = {}  # timeline so far for active runs
         self._live_lock = threading.Lock()
@@ -74,8 +72,8 @@ class RunRunner:
             api_key=api_key,
             required_ppe=opts.required_ppe,
             analysis_interval_sec=opts.analysis_interval_sec,
-            max_workers=self.max_workers,
             person_model=str(self.person_model) if self.person_model else None,
+            tuning=opts.tuning,
         )
         with self._live_lock:
             self._live[run_id] = []

@@ -1,7 +1,8 @@
 """PPE checks on tracked workers using Moondream.
 
 Workers are found and tracked locally (ppe.people). For each worker due a check:
-  1. The worker is cropped and asked one yes/no question per required PPE item.
+  1. The worker is cropped and asked one yes/no question per required PPE item
+     (prompts and the rules below are tunable, see ppe.tuning).
   2. A "no" answer is confirmed with `detect` on the crop: if the item is found
      on this worker (in the right part of their box, and not on a neighbour who
      overlaps the crop) it counts as present; if the body part it belongs on
@@ -66,6 +67,7 @@ class WorkerResult:
 
 
 def _with_retries(fn, *args, attempts: int = 6, **kwargs):
+    """Calls fn, retrying failures with exponential back-off; a rejected API key is not retried."""
     delay = 1.0
     for i in range(attempts):
         try:
@@ -97,56 +99,75 @@ class PPEAnalyzer:
 
             model = MoondreamCloud(api_key=config.api_key)
         self.model = model
-        self._pool = ThreadPoolExecutor(max_workers=config.max_workers)
+        self.tuning = config.tuning
+        self._pool = ThreadPoolExecutor(max_workers=self.tuning.parallel_requests)
+
+    def _call(self, fn, *args):
+        return _with_retries(fn, *args, attempts=self.tuning.retry_attempts)
 
     # -- PPE check -----------------------------------------------------------
     def _crop_box(self, image: Image.Image, box) -> tuple[float, float, float, float]:
         w, h = image.size
         x1, y1, x2, y2 = box
-        px = (x2 - x1) * self.config.crop_padding
-        py = (y2 - y1) * self.config.crop_padding
+        px = (x2 - x1) * self.tuning.crop_padding
+        py = (y2 - y1) * self.tuning.crop_padding
         return max(0, x1 - px), max(0, y1 - py), min(w, x2 + px), min(h, y2 + py)
 
     def _found_on_worker(self, crop: Image.Image, crop_box, term: str, box, others,
-                         region: tuple[float, float]) -> bool:
+                         region: tuple[float, float], trace: list | None = None) -> bool:
         """True if detect() finds `term` on this worker rather than elsewhere in the crop."""
         cx1, cy1, cx2, cy2 = crop_box
         cw, ch = cx2 - cx1, cy2 - cy1
-        for o in _with_retries(self.model.detect, crop, term).get("objects", []):
+        objects = self._call(self.model.detect, crop, term).get("objects", [])
+        found = False
+        for o in objects:
             # Normalised crop coordinates -> frame pixels.
             px = cx1 + (o["x_min"] + o["x_max"]) / 2 * cw
             py = cy1 + (o["y_min"] + o["y_max"]) / 2 * ch
-            if _owner((px, py), box, others, region) == box:
-                return True
-        return False
+            on_worker = _owner((px, py), box, others, region) == box
+            found = found or on_worker
+            if trace is not None:
+                trace.append({"step": "detect_object", "term": term, "box": o, "on_worker": on_worker})
+        if trace is not None:
+            trace.append({"step": "detect", "term": term, "found": len(objects), "on_worker": found})
+        return found
 
-    def _item_status(self, crop: Image.Image, crop_box, item: str, box, others) -> str:
-        """Returns "present", "missing" or "unverified"."""
-        spec = PPE_CATALOG[item]
-        question = (
-            f"Focus on the main person in the centre of this image. "
-            f"Is this person wearing {spec.question}? Answer only yes or no."
-        )
-        answer = _with_retries(self.model.query, crop, question).get("answer", "")
+    def _item_status(self, crop: Image.Image, crop_box, item: str, box, others,
+                     trace: list | None = None) -> str:
+        """Returns "present", "missing" or "unverified". If `trace` is a list, each step is appended."""
+        t, spec = self.tuning, self.tuning.items[item]
+        question = t.question_for(item)
+        answer = self._call(self.model.query, crop, question).get("answer", "")
         verdict = _is_yes(answer)
+        if trace is not None:
+            trace.append({"step": "query", "question": question, "answer": answer,
+                          "read_as": {True: "yes", False: "no", None: "unclear"}[verdict]})
         if verdict is None:
-            log.debug("Unclear answer for %s: %r - treating as present", item, answer)
-            # Benefit of the doubt: don't flag a violation on an ambiguous answer.
-            return "present"
+            log.debug("Unclear answer for %s: %r - treating as %s", item, answer, t.unclear_answer)
+            return t.unclear_answer
         if verdict:
             return "present"
+        if not t.confirm_no_with_detect:
+            return "missing"
         # The query model says "no" too eagerly on occluded or cut-off workers,
         # so confirm before flagging a violation.
-        if self._found_on_worker(crop, crop_box, spec.detect_term, box, others, spec.region):
+        if self._found_on_worker(crop, crop_box, spec.detect_term, box, others, spec.region, trace):
             return "present"
-        if spec.body_part and not self._found_on_worker(crop, crop_box, spec.body_part, box, others,
-                                                         spec.region):
+        if t.check_body_part and spec.body_part and not self._found_on_worker(
+                crop, crop_box, spec.body_part, box, others, spec.region, trace):
             return "unverified"
         return "missing"
 
+    def explain_item(self, image: Image.Image, item: str) -> dict:
+        """Check one PPE item on an image of a single worker and return every step (for tuning)."""
+        box = (0, 0, *image.size)
+        trace: list = []
+        status = self._item_status(image, box, item, box, [], trace)
+        return {"item": item, "status": status, "steps": trace}
+
     def check_worker(self, image: Image.Image, box, others=()) -> WorkerResult:
         """`others` are the other workers' boxes in the frame, so their PPE isn't credited to this one."""
-        if box[3] - box[1] < self.config.min_check_height_frac * image.size[1]:
+        if box[3] - box[1] < self.tuning.min_check_height_frac * image.size[1]:
             return WorkerResult(box=box, too_small=True)
         crop_box = self._crop_box(image, box)
         crop = image.crop(crop_box)

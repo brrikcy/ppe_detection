@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import Request
 
 from ..core.settings import Settings
+from ..services.dev_settings import DevSettingsStore
 from ..services.keys import KeyVerifier
 from ..services.media import VideoConverter
 from ..services.run_store import RunStore
@@ -29,3 +30,7 @@ def get_key_verifier(request: Request) -> KeyVerifier:
 
 def get_video_converter(request: Request) -> VideoConverter:
     return request.app.state.video_converter
+
+
+def get_dev_settings(request: Request) -> DevSettingsStore:
+    return request.app.state.dev_settings

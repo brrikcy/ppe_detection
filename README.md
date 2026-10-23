@@ -49,7 +49,7 @@ If `opencv-python-headless` is already installed, Ultralytics' `opencv-python` d
 |---|---|---|---|
 | `MOONDREAM_API_KEY` | — | both | Moondream key. In the web app it's the fallback when the form field is empty. |
 | `PERSON_MODEL` | `models/yolo11n.pt` | both | YOLO weights for person tracking (run from the project folder). |
-| `MAX_WORKERS` | `4` | both | Parallel Moondream requests. Lower it if you hit rate limits. |
+| `MAX_WORKERS` | `4` | command line | Parallel Moondream requests. In the web app this is a developer option. |
 | `REQUIRED_PPE` | `helmet,vest` | command line | PPE items to check. The web app takes them from the form. |
 | `ANALYSIS_INTERVAL_SEC` | `1.0` | command line | Seconds between PPE checks. The web app takes it from the form. |
 | `PPE_DATA_DIR` | `runs/` | web app | Where runs are saved. |
@@ -75,7 +75,23 @@ python run.py --port 8080 --no-browser
      - **Occasional**: violations in fewer than half of their checks.
      - **Always OK**: no violations in any check.
    - **Violations**: a snapshot card for every flagged worker, filterable by type. Click one to open the image viewer (← → to browse, full frame or worker crop, "Show in video").
-5. Every run is listed in the sidebar, so you can switch between runs or delete them.
+5. Every run is listed in the sidebar, so you can switch between runs or delete them. Runs made with non-default developer settings show a **Custom settings** chip; hover it to see what was changed.
+
+### Developer options
+
+**Developer options** in the sidebar tunes detection without touching code. Saved settings apply to new runs, and each run keeps a copy of the settings it used, so results stay reproducible. Each setting shows a dot and a **Reset** link when it differs from the default.
+
+- **Moondream prompts**: the question template (`{item}` is replaced by the item's wording), and per item: the wording, the detect term used to overrule a "no", the body part that must be visible, and the region of the worker's box where the item may be.
+- **Decision rules**:
+  - what an unclear answer counts as (present, unverified or missing)
+  - whether "no" answers are double-checked with detect, and whether a hidden body part makes an item unverified
+  - crop padding and the minimum worker height to check
+  - the video vote window, and the share of checks that flags a person in the People section
+- **Moondream requests**: parallel requests and attempts per call.
+- **Person tracking**: detection model (any `.pt` file in `models/`), input size, detection confidence, the confidence needed to start a new person, the minimum track age, and how long a hidden worker keeps their ID.
+- **Prompt playground**: pick a worker image from any completed run (or upload one), choose an item and run one check with the settings on the page, saved or not. It shows the exact question, Moondream's raw answer, each detect step, the boxes detect found on the image (green: on this worker, dashed: outside the item's region), and the verdict. It uses 1–3 Moondream calls and saves nothing.
+
+Settings are stored in `runs/_dev/tuning.json`. The command line can use the same file: `python annotate_video.py site.mp4 --tuning runs/_dev/tuning.json`.
 
 Runs execute one at a time; any others wait as *queued*. Restarting the server marks unfinished runs as failed. The annotated video is H.264, which plays in Chrome, Edge, Safari and Firefox. Videos from older runs saved in another format are converted the first time they're opened.
 
@@ -118,6 +134,8 @@ people/          best view of each tracked worker, <id>.jpg
 | GET | `/api/runs/{id}` | Status, progress and dashboard summary (partial while running) |
 | GET | `/api/runs/{id}/video` · `/report` · `/preview` · `/snapshots/{name}` · `/frames/{name}` · `/people/{name}` | Media |
 | DELETE | `/api/runs/{id}` | Delete a finished run |
+| GET · PUT · DELETE | `/api/dev/tuning` | Read, save (JSON body) or reset the developer settings |
+| POST | `/api/dev/try` | Multipart: `item`, `tuning?` (JSON), `api_key?`, and `image` or `run_id` + `folder` + `name`. Returns each step of one check. |
 
 Interactive docs: http://127.0.0.1:8000/docs
 
@@ -136,11 +154,13 @@ app/
     summary.py          dashboard metrics and per-person status from the report's timeline
     keys.py             form key -> server key fallback, key check
     media.py            converts older runs' videos for browser playback
+    dev_settings.py     saved developer settings (runs/_dev/tuning.json)
   api/deps.py           dependency providers
-  api/routes/           config.py, runs.py
-  static/               index.html, styles.css, js/ (api, ui, charts, lightbox, views/)
+  api/routes/           config.py, runs.py, dev.py
+  static/               index.html, styles.css, js/ (api, ui, charts, lightbox, views/: newRun, runView, devView)
 ppe/                    detection pipeline (shared with the command line)
   config.py             PPE items and pipeline settings
+  tuning.py             developer settings: prompts, decision rules, requests, tracking (validated)
   people.py             YOLO11n + BoT-SORT person tracking, every frame
   analyzer.py           Moondream PPE checks on tracked workers
   moondream_client.py   Moondream Cloud REST client (detect, query)
@@ -158,6 +178,7 @@ python annotate_video.py site.mp4 --interval 0.5        # check PPE twice a seco
 python annotate_video.py site.mp4 --required helmet,vest,gloves
 python annotate_video.py site.mp4 --max-seconds 10      # quick trial on the first 10s
 python annotate_video.py site.mp4 -o out.mp4 --workers 2 -v
+python annotate_video.py site.mp4 --tuning runs/_dev/tuning.json   # use the web app's developer settings
 ```
 
 Supported PPE items: `helmet`, `vest`, `gloves`, `boots`, `goggles`, `mask` (default: `helmet,vest`).
@@ -170,7 +191,7 @@ Supported PPE items: `helmet`, `vest`, `gloves`, `boots`, `goggles`, `mask` (def
 - Someone hidden for more than 8 seconds, or who comes out from behind another worker far from where they went in, gets a new ID. BoT-SORT's appearance ReID didn't help on our test videos, so it is off.
 - With a camera moving through a group, people at the frame edges are detected on and off, which starts new IDs.
 - Tracking assumes a continuous shot. A scene cut, or two workers crossing while they look alike, can start a new ID or swap two IDs.
-- Moondream's free tier rate-limits (HTTP 429). Requests are retried with backoff, and lowering `MAX_WORKERS` reduces how often this happens.
+- Moondream's free tier rate-limits (HTTP 429). Requests are retried with backoff, and lowering parallel requests (developer options, or `MAX_WORKERS` on the command line) reduces how often this happens.
 
 ## Tests
 

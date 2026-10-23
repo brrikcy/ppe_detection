@@ -25,11 +25,13 @@ def status_label(violations: list[str]) -> str:
     return "PPE OK" if not violations else f"PPE Violation ({len(violations)}) - {', '.join(violations)}"
 
 
-def build_people(timeline: list[dict], available_photos: set[str] | None = None) -> list[PersonSummary]:
+def build_people(timeline: list[dict], available_photos: set[str] | None = None,
+                 flag_ratio: float = 0.5) -> list[PersonSummary]:
     """Aggregate each tracked person's checks.
 
     A person's overall status flags an item only when it was missing in more than
-    half of their checks, so a single misread frame doesn't mark them as violating.
+    `flag_ratio` of their checks (default half), so a single misread frame doesn't
+    mark them as violating.
     """
     people: dict[int, dict] = {}
     for entry in timeline:
@@ -47,7 +49,7 @@ def build_people(timeline: list[dict], available_photos: set[str] | None = None)
 
     out = []
     for tid, p in sorted(people.items()):
-        overall = [label for label, n in p["missing"].most_common() if n > p["checks"] / 2]
+        overall = [label for label, n in p["missing"].most_common() if n > p["checks"] * flag_ratio]
         photo = person_photo_name(tid)
         out.append(PersonSummary(
             id=tid,
@@ -67,7 +69,7 @@ def build_people(timeline: list[dict], available_photos: set[str] | None = None)
 
 def build_summary(timeline: list[dict], available_snapshots: set[str] | None = None,
                   available_frames: set[str] | None = None,
-                  available_photos: set[str] | None = None) -> RunSummary:
+                  available_photos: set[str] | None = None, flag_ratio: float = 0.5) -> RunSummary:
     """available_* limit image references to files that exist (None = assume all exist)."""
     by_type: Counter[str] = Counter()
     unverified: Counter[str] = Counter()
@@ -129,5 +131,5 @@ def build_summary(timeline: list[dict], available_snapshots: set[str] | None = N
         timeline=points,
         events=events,
         tracked=any(w.get("track_id") is not None for e in timeline for w in e["workers"]),
-        people=build_people(timeline, available_photos),
+        people=build_people(timeline, available_photos, flag_ratio),
     )

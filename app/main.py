@@ -12,8 +12,10 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from .api.routes import config as config_routes
+from .api.routes import dev as dev_routes
 from .api.routes import runs as runs_routes
 from .core.settings import Settings
+from .services.dev_settings import DevSettingsStore
 from .services.keys import KeyVerifier, verify_key
 from .services.media import VideoConverter
 from .services.run_store import RunStore
@@ -40,11 +42,13 @@ def create_app(settings: Settings | None = None,
     app.state.store = store
     app.state.verify_key = key_verifier
     app.state.video_converter = VideoConverter()
-    app.state.runner = RunRunner(store, analyzer_factory, max_workers=settings.max_workers,
-                                 people_factory=people_factory, person_model=settings.person_model)
+    app.state.dev_settings = DevSettingsStore(settings.data_dir)
+    app.state.runner = RunRunner(store, analyzer_factory, people_factory=people_factory,
+                                 person_model=settings.person_model)
 
     app.include_router(config_routes.router)
     app.include_router(runs_routes.router)
+    app.include_router(dev_routes.router)
     # Registered last so /api routes take precedence.
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

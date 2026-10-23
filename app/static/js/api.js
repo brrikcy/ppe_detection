@@ -17,11 +17,20 @@ async function request(path, options = {}) {
   }
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
+    let detail = null;
     try {
       const body = await res.json();
-      if (body.detail) message = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      detail = body.detail ?? null;
+      if (typeof detail === "string") message = detail;
+      else if (Array.isArray(detail)) {
+        // FastAPI validation errors: [{loc: ["body", "crop_padding"], msg: "..."}]
+        message = detail.map((d) => `${d.loc.filter((p) => p !== "body").join(".")}: ${d.msg}`).join("\n");
+      }
     } catch { /* not JSON */ }
-    throw new Error(message);
+    const err = new Error(message);
+    err.status = res.status;
+    err.detail = detail;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }
@@ -53,6 +62,15 @@ export const api = {
       xhr.onerror = () => reject(new ServerUnreachable());
       xhr.send(form);
     });
+  },
+
+  dev: {
+    get: () => request("/api/dev/tuning"),
+    save: (tuning) => request("/api/dev/tuning", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tuning),
+    }),
+    reset: () => request("/api/dev/tuning", { method: "DELETE" }),
+    tryPrompt: (form) => request("/api/dev/try", { method: "POST", body: form }),
   },
 
   urls: {

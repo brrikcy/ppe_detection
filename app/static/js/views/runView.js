@@ -8,7 +8,10 @@ import { fmt, h, icons, plural, statusPill } from "../ui.js";
 const POLL_MS = 1000;
 const EVENTS_PAGE = 24;
 
+let tuningDefaults = null; // developer-settings defaults, to mark runs made with custom settings
+
 export async function renderRun(root, runId, { onChanged, onDeleted }) {
+  if (!tuningDefaults) tuningDefaults = await api.dev.get().then((s) => s.defaults).catch(() => null);
   let timer = null;
   let disposed = false;
   let lastStatus = null;
@@ -66,7 +69,23 @@ function header(run, actions = []) {
       h("span", { class: "chip" }, `Checks: ${items}`),
       h("span", { class: "chip" }, `Every ${m.options.analysis_interval_sec}s`),
       m.options.max_seconds ? h("span", { class: "chip" }, `First ${m.options.max_seconds}s only`) : null,
-      h("span", { class: "chip" }, m.key_source === "server" ? "Server API key" : "Entered API key")));
+      h("span", { class: "chip" }, m.key_source === "server" ? "Server API key" : "Entered API key"),
+      customChip(m.options.tuning)));
+}
+
+// Shows which developer settings this run used, when they differ from the defaults.
+function customChip(t) {
+  if (!t) return null;
+  const changed = [];
+  const walk = (a, b, prefix) => {
+    for (const k of Object.keys(a)) {
+      if (a[k] && typeof a[k] === "object" && b?.[k] && typeof b[k] === "object") walk(a[k], b[k], `${prefix}${k}.`);
+      else if (JSON.stringify(a[k]) !== JSON.stringify(b?.[k])) changed.push(`${prefix}${k}: ${JSON.stringify(a[k])}`);
+    }
+  };
+  walk(t, tuningDefaults ?? t, "");
+  if (!changed.length) return null;
+  return h("span", { class: "chip chip-dev", title: changed.join("\n") }, `Custom settings (${changed.length})`);
 }
 
 function deleteButton(run, onDeleted) {

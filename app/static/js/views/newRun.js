@@ -6,7 +6,7 @@ import { fmt, h, icons } from "../ui.js";
 const INTERVALS = [0.5, 1, 2, 5];
 
 export async function renderNewRun(root, { onCreated }) {
-  const config = await api.config();
+  const [config, dev] = await Promise.all([api.config(), api.dev.get()]);
   let file = null;
   let duration = null;
   let previewFailed = false; // browser can't decode the file; the server still can
@@ -147,6 +147,9 @@ export async function renderNewRun(root, { onCreated }) {
         h("div", { class: "field" },
           h("label", { class: "label", for: "max-seconds" }, "Only the first … seconds"),
           maxSec),
+        dev.changes.length ? h("div", { class: "field" }, h("div", { class: "dev-note" },
+          `Developer settings: ${dev.changes.length} change${dev.changes.length === 1 ? "" : "s"} from the defaults will be used. `,
+          h("a", { href: "#dev" }, "Review"))) : null,
         h("div", { class: "field" }, estimate),
         h("div", { class: "submit-row" }, runBtn, uploadBar),
         formError)));

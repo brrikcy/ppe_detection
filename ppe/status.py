@@ -12,16 +12,20 @@ from dataclasses import dataclass, field
 
 from .analyzer import WorkerResult
 
-VOTE_WINDOW = 3
+VOTE_WINDOW = 3  # default; tunable as Tuning.vote_window
 
 
 @dataclass
 class PersonStatus:
-    history: deque = field(default_factory=lambda: deque(maxlen=VOTE_WINDOW))  # violations per check
+    window: int = VOTE_WINDOW
+    history: deque = field(init=False)  # violations per check, the last `window` checks
     shown: list[str] = field(default_factory=list)  # violation labels currently displayed
     unverified: list[str] = field(default_factory=list)  # from the latest check
     checks: int = 0
     last_check_frame: int | None = None
+
+    def __post_init__(self):
+        self.history = deque(maxlen=self.window)
 
     def add(self, result: WorkerResult, frame: int) -> None:
         if result.too_small:

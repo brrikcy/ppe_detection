@@ -9,6 +9,7 @@ from PIL import Image
 from ppe.analyzer import PPEAnalyzer, WorkerResult
 from ppe.annotate import draw_results
 from ppe.config import Config
+from ppe.tuning import Tuning
 from ppe.people import TrackedPerson
 from ppe.status import PersonStatus
 from ppe.video import process_video
@@ -44,7 +45,9 @@ class FakePeople:
 
 
 def make_cfg(**kw):
-    return Config(api_key="test", **kw)
+    """Config with tuning fields (crop_padding, parallel_requests, ...) passed as keywords."""
+    tun = {k: kw.pop(k) for k in list(kw) if k in Tuning.model_fields}
+    return Config(api_key="test", tuning=Tuning(**tun), **kw)
 
 
 def frame():
@@ -226,15 +229,11 @@ def test_failed_check_is_skipped_not_repeated(tmp_path):
                 raise RuntimeError("HTTP 500")
             return super().query(image, question)
 
-    import ppe.analyzer as analyzer_mod
-    real_retries = analyzer_mod._with_retries
-    analyzer_mod._with_retries = lambda fn, *a, **k: fn(*a, **k)  # no retry/backoff in this test
-    try:
-        a = PPEAnalyzer(make_cfg(crop_padding=0.0, required_ppe=["helmet"], max_workers=1), model=FlakyOnce())
-        report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: FakePeople())
-        a.close()
-    finally:
-        analyzer_mod._with_retries = real_retries
+    # retry_attempts=1: no retry or back-off in this test
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0, required_ppe=["helmet"], parallel_requests=1, retry_attempts=1),
+                    model=FlakyOnce())
+    report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: FakePeople())
+    a.close()
     # The first check failed, so there is no entry for frame 0 (rather than a stale copy).
     # Nobody has a verdict yet, so frame 1 checks them as newcomers.
     assert [(e["frame"], e["arrival"]) for e in report["timeline"]] == [(1, True), (10, False), (20, False)]

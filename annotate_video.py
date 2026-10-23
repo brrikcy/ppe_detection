@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ppe.analyzer import PPEAnalyzer
 from ppe.config import Config
+from ppe.tuning import Tuning
 from ppe.video import process_video
 
 
@@ -22,15 +23,19 @@ def main():
     p.add_argument("--interval", type=float, help="Seconds between analysed frames (default 1.0)")
     p.add_argument("--required", help="Comma separated PPE items, e.g. helmet,vest,gloves")
     p.add_argument("--max-seconds", type=float, help="Only process the first N seconds")
-    p.add_argument("--workers", type=int, help="Parallel Moondream requests")
+    p.add_argument("--workers", type=int, help="Parallel Moondream requests (default: MAX_WORKERS or 4)")
+    p.add_argument("--tuning", help="JSON file of developer settings (e.g. runs/_dev/tuning.json)")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
-    cfg = Config.from_env(analysis_interval_sec=args.interval, required_ppe=args.required,
-                          max_workers=args.workers)
+    tuning = Tuning.model_validate_json(Path(args.tuning).read_text()) if args.tuning else None
+    if args.workers:
+        tuning = tuning or Tuning()
+        tuning = tuning.model_copy(update={"parallel_requests": args.workers})
+    cfg = Config.from_env(tuning=tuning, analysis_interval_sec=args.interval, required_ppe=args.required)
     inp = Path(args.input)
     out = Path(args.output) if args.output else Path("outputs") / f"{inp.stem}_annotated.mp4"
 

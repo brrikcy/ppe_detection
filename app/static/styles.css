@@ -408,3 +408,27 @@ select.input { font-family: var(--body); }
   .set-row.is-toggle { grid-template-columns: minmax(0, 1fr) auto; }
   .dev-bar { position: static; }
 }
+
+/* Layout switch and the stacked view: label above control, settings flowing in columns,
+   long text fields full width, every PPE item as its own card side by side. */
+.view-switch { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface); }
+.view-switch .eyebrow { padding: 0 6px 0 8px; }
+.view-switch button { height: 28px; padding: 0 12px; border: 0; border-radius: 14px; background: none; color: var(--fg-2); font: 500 13px var(--body); cursor: pointer; }
+.view-switch button[aria-pressed="true"] { background: var(--fg); color: var(--surface); }
+.item-panel-title { display: none; align-items: center; gap: 8px; font-size: 18px; }
+.is-stacked .item-tabs { display: none; }
+.is-stacked .item-panel-title { display: flex; }
+.is-stacked .set-rows { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px 28px; }
+.is-stacked .set-row { grid-template-columns: minmax(0, 1fr); align-items: start; align-content: start; gap: 6px; padding: 0; border: 0; }
+.is-stacked .set-row .set-control { justify-content: flex-start; }
+.is-stacked .set-row.is-toggle { grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; }
+.is-stacked .set-row.is-toggle .set-control { order: -1; justify-content: flex-start; padding-top: 1px; }
+.is-stacked .set-row.is-wide { grid-column: 1 / -1; }
+.is-stacked .set-row.is-child { margin-left: 0; padding-left: 12px; }
+.is-stacked .set-group + .set-group { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line); }
+.is-stacked .set-group-title { margin-bottom: 12px; }
+.is-stacked .item-panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.is-stacked .item-panel { grid-template-columns: minmax(0, 1fr); gap: 14px; align-content: start; padding: 14px; border: 1px solid var(--line); border-radius: var(--r); }
+.is-stacked .item-panel .set-row .set-control > .input:not(.num-input) { flex: 1; }
+.is-stacked .set-row:not(.is-wide):not(.is-toggle) .set-control > .input:not(.num-input) { max-width: 100%; }
+.set-rows > .item-panel-title + .set-row { border-top: 0; }

@@ -152,6 +152,16 @@ const ITEM_ROWS = [
     dependsOn: usesDetect, parts: [["min_height", "min", 0, 2, 0.01], ["max_height", "max", 0, 2, 0.05]] },
 ];
 
+// Page layout, remembered in this browser: "stacked" (label above control, settings in columns,
+// all PPE items side by side) or "list" (one setting per row, control on the right, item tabs).
+const VIEW_KEY = "ppe.devView";
+function savedView() {
+  try { return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "stacked"; } catch { return "stacked"; }
+}
+function rememberView(v) {
+  try { localStorage.setItem(VIEW_KEY, v); } catch { /* private window: just not remembered */ }
+}
+
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -349,24 +359,29 @@ export async function renderDev(root) {
   for (const key of Object.keys(ITEM_LABELS)) {
     const obj = () => draft.items[key];
     const defObj = () => defaults.items[key];
-    panels[key] = h("div", { class: "set-rows", role: "tabpanel", id: `item-panel-${key}`, hidden: key !== currentItem },
-      ITEM_ROWS.map((r) => (r.pair ? pairSetting(r, obj, defObj, `i-${key}-`) : setting(r, obj, defObj, `i-${key}-`))));
+    panels[key] = h("div", { class: "set-rows item-panel", id: `item-panel-${key}` },
+      h("h3", { class: "item-panel-title" }, ITEM_LABELS[key], h("span", { class: "changed-dot", title: "Changed from the default" })),
+      ...ITEM_ROWS.map((r) => (r.pair ? pairSetting(r, obj, defObj, `i-${key}-`) : setting(r, obj, defObj, `i-${key}-`))));
     const dot = h("span", { class: "changed-dot", title: "Changed from the default" });
     tabButtons[key] = h("button", { type: "button", role: "tab", class: "item-tab", "aria-controls": `item-panel-${key}`,
       onclick: () => selectItem(key) }, ITEM_LABELS[key], dot);
-    controls.push({ refresh() { dot.hidden = same(draft.items[key], defaults.items[key]); } });
+    const titleDot = panels[key].querySelector(".item-panel-title .changed-dot");
+    controls.push({ refresh() { dot.hidden = titleDot.hidden = same(draft.items[key], defaults.items[key]); } });
   }
+  let view = savedView();
   function selectItem(key) {
     currentItem = key;
     for (const k of Object.keys(panels)) {
-      panels[k].hidden = k !== key;
+      // Stacked view shows every item; list view shows the selected tab.
+      panels[k].hidden = view === "list" && k !== key;
+      if (view === "list") panels[k].setAttribute("role", "tabpanel"); else panels[k].removeAttribute("role");
       tabButtons[k].setAttribute("aria-selected", String(k === key));
     }
   }
   tabs.append(...Object.values(tabButtons));
   selectItem(currentItem);
   const itemsCard = card("items", "PPE items", "How each item is asked about and checked. A dot marks items changed from the defaults.",
-    tabs, h("div", { class: "set-group" }, ...Object.values(panels)));
+    tabs, h("div", { class: "set-group item-panels" }, ...Object.values(panels)));
 
   // ---- other settings ----------------------------------------------------------------
   const settingCards = CARDS.map((c) => card(c.id, c.title, c.intro,
@@ -388,19 +403,35 @@ export async function renderDev(root) {
       .map(([id, label]) => h("button", { type: "button", onclick: () => document.getElementById(`dev-${id}`)
         ?.scrollIntoView({ behavior: "smooth", block: "start" }) }, label)));
 
-  root.replaceChildren(h("div", { class: "page dev-page" },
+  const page = h("div", { class: "page dev-page" });
+  const viewButtons = [["stacked", "Stacked"], ["list", "List"]].map(([v, label]) => h("button", {
+    type: "button", "data-view": v, onclick: () => setView(v) }, label));
+  const viewSwitch = h("div", { class: "view-switch", role: "group", "aria-label": "Layout" },
+    h("span", { class: "eyebrow" }, "Layout"), ...viewButtons);
+  function setView(v) {
+    view = v;
+    rememberView(v);
+    page.classList.toggle("is-stacked", v === "stacked");
+    page.classList.toggle("is-list", v === "list");
+    viewButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
+    selectItem(currentItem);
+  }
+
+  page.append(
     h("div", { class: "run-head" },
       h("div", { class: "title" },
         h("span", { class: "eyebrow" }, "Developer options"),
         h("h1", {}, "Tune detection"),
         changesNote),
-      h("div", { class: "actions" }, resetBtn)),
+      h("div", { class: "actions" }, viewSwitch, resetBtn)),
     h("div", { class: "dev-bar" }, nav, h("div", { class: "actions" }, dirtyPill, discardBtn, saveBtn)),
     errorBox,
     playground,
     promptCard,
     itemsCard,
-    cards.rules, cards.voting, cards.requests, cards.tracking));
+    cards.rules, cards.voting, cards.requests, cards.tracking);
+  root.replaceChildren(page);
+  setView(view);
   refreshBar();
   return () => {};
 }

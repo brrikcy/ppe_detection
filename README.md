@@ -85,10 +85,10 @@ python run.py --port 8080 --no-browser
 
 ### Developer options
 
-**Developer options** in the sidebar tunes detection without touching code. Saved settings apply to new runs, and each run keeps a copy of the settings it used, so results stay reproducible. Settings are listed with their description on the left and the control on the right, grouped by what they do; a bar that stays at the top jumps between sections and holds **Save** and **Discard changes**. Each setting shows a dot and a **Reset** link when it differs from the default.
+**Developer options** in the sidebar tunes detection without touching code. Saved settings apply to new runs, and each run keeps a copy of the settings it used, so results stay reproducible. Settings are grouped by what they do, and a bar that stays at the top jumps between sections and holds **Save** and **Discard changes**. The **Layout** switch next to **Reset all to defaults** chooses between **Stacked** (the default: label above each control, settings in columns, all PPE items side by side) and **List** (one setting per row with the control on the right, PPE items as tabs); the choice is remembered in the browser. Each setting shows a dot and a **Reset** link when it differs from the default.
 
 - **Moondream prompts**: the question template (`{item}` is replaced by the item's wording), an option to ask about all items in one question per worker (fewer calls, possibly less reliable), and the re-check question for a detected box (`{term}`).
-- **PPE items**: one tab per item with its wording, detect term, the body part that must be visible, the region of the worker's box where the item may be, and the plausible width and height of a detected box. A dot on a tab marks an item changed from the defaults.
+- **PPE items**: one card (or, in the List layout, one tab) per item with its wording, detect term, the body part that must be visible, the region of the worker's box where the item may be, and the plausible width and height of a detected box. A dot marks an item changed from the defaults.
 - **Decision rules**:
   - what an unclear answer counts as (present, unverified or missing)
   - whether "no" answers are double-checked with detect, and whether a hidden body part then makes an item unverified

@@ -273,6 +273,7 @@ function buildLive(run) {
   const cards = new Map(); // incident key -> {el, img, time}
   const chips = new Map(); // person id -> {el, status}
   let lastFrames = -1, lastPoints = -1, lastStatus = null;
+  const stream = { on: false, failed: false };
   const started = { t: performance.now(), f: run.progress_fraction };
 
   page.update = (run) => {
@@ -295,10 +296,20 @@ function buildLive(run) {
       : done > 0.03 && secs > 4 ? `About ${fmt.duration((secs / done) * (1 - frac))} left`
         : "Estimating time left…";
 
-    // The preview is refreshed as frames are written, so it plays along with the inspection.
+    // The preview plays along with the inspection: a live run streams every frame (MJPEG),
+    // others refresh a still as frames are written. If the stream drops, refresh the still.
     if (m.progress.frames_done !== lastFrames && m.progress.frames_done > 0) {
       lastFrames = m.progress.frames_done;
-      swapImage(previewImg, api.urls.preview(id));
+      if (m.options.live && m.status === "running" && !stream.failed) {
+        if (!stream.on) {
+          stream.on = true;
+          previewImg.onerror = () => { stream.failed = true; previewImg.onerror = null; };
+          previewImg.src = api.urls.live(id);
+          previewImg.classList.add("is-loaded");
+        }
+      } else {
+        swapImage(previewImg, api.urls.preview(id));
+      }
       waiting.hidden = true;
     }
     // What the pipeline is doing right now, so a slow Moondream answer doesn't look like a freeze.

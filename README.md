@@ -76,7 +76,7 @@ python run.py --port 8080 --no-browser
 ```
 
 1. Optionally enter a Moondream API key. If you leave it empty, the server uses `MOONDREAM_API_KEY` from `.env`. **Test key** checks it with one call. The key is checked again when you start a run, so a wrong key shows on the form instead of creating a failed run. Keys are never written to disk.
-2. Drop in a video, choose the required PPE, the check interval (0.5, 1, 2 or 5s) and optionally a time limit, then click **Run inference**. The form shows an estimate of the Moondream calls.
+2. Drop in a video, choose the required PPE, the check interval (0.5, 1, 2 or 5s) and optionally a time limit, then click **Run inference**. The form shows an estimate of the Moondream calls. **Live mode** (on by default) plays the video at its normal speed while it's inspected, streamed to the page frame by frame; see [Live mode](#live-mode).
 3. While the run is processing, the page fills in live: the annotated video as it's being written (refreshed about twice a second) with a **Live** badge and the video time, progress with an estimate of the time left, what it's doing right now (e.g. "Asking Moondream about 3 workers at 0:04…", so a slow answer doesn't look like a freeze), running counts (violations, people, worker checks, compliance), the compliance chart growing column by column, violations sliding in as they're found (newest first), and a strip of the people found so far, coloured by status (click one to open their profile). The page is updated in place rather than redrawn, and images swap in once loaded, so nothing flickers. You can leave the page; the run keeps going.
 4. When it finishes, the dashboard shows:
    - **Summary figures**: compliance (OK checks out of OK + violation checks; checks where an item couldn't be seen and first checks are left out and listed), violation incidents, share of time with a violation, and people tracked.
@@ -190,9 +190,11 @@ ppe/                    detection pipeline (shared with the command line)
   analyzer.py           Moondream PPE checks on tracked workers
   moondream_client.py   Moondream Cloud REST client (detect, query)
   status.py             per-worker status voted over recent checks
-  video.py              the frame loop: track, check, draw, encode
+  video.py              the frame loop: decode, track, check, draw, encode (own threads); live mode
   annotate.py           boxes and tags
-  media.py              ffmpeg output
+  media.py              ffmpeg input and output
+moondream_server/       Moondream on a local GPU with the Cloud API (serve.py), endpoint benchmark (bench.py)
+deploy/                 setup_gpu.sh and start.sh for a GPU server
 ```
 
 ## Command line
@@ -216,6 +218,31 @@ Supported PPE items: `helmet`, `vest`, `gloves`, `boots`, `goggles`, `mask` (def
 Every request names its model (`moondream3.1-9B-A2B` by default; change it in Developer options or with `--model`). If the endpoint doesn't accept the model, a run is refused at the start (the key check sends one request with the same model), and a run that hits it mid-way stops with a message pointing to Developer options. Each run records the endpoint and model it used (`moondream_endpoint` and `tuning.moondream_model` in the report; the model is also shown on the run page).
 
 **Moondream Cloud is closing on 13 November 2026** ([Moondream's announcement](https://moondream.ai/blog/moondream-is-joining-prime-intellect)). To keep using Moondream after that, point `MOONDREAM_ENDPOINT` at a service with the same API, such as Prime Intellect's hosted Moondream, or a self-hosted Moondream server, and set the model ID that service uses.
+
+## Live mode
+
+Without live mode, every frame waits until its workers' PPE check is back from Moondream, so the video is exact but plays only as fast as Moondream answers. **Live mode** is for showing inspection as it happens:
+
+- The video plays at its own speed and streams to the run page (MJPEG, every frame). Boxes follow workers on every frame.
+- A frame waits at most 1 second for its check. If Moondream is slower, the frame is shown with the statuses so far, and the new tag appears from the frame where the answer arrives. All checks are still in the report.
+- A check is skipped while two others are still with Moondream, so slow answers never pile up.
+- Video taller than 1080p (e.g. 4K) is processed and written at 1080p. 4K is too slow to decode, draw and encode at 30 fps.
+
+Decoding, tracking and drawing + encoding run on separate threads, in both modes. To keep up with a 30 fps video, person detection needs a GPU: on a 4-core laptop CPU it takes 170–300 ms per detection, and on a GPU a few ms.
+
+## Live demo on a GPU
+
+Runs the app and Moondream itself on one GPU machine, so PPE checks don't go over the internet. Moondream runs locally with **Photon**, Moondream's own inference engine (`pip install moondream`; the same `moondream3.1-9B-A2B` model as the Cloud, no API key for the base model). `moondream_server/serve.py` serves it with the Cloud's REST API, so the pipeline only needs `MOONDREAM_ENDPOINT` changed.
+
+1. **GPU.** NVIDIA Ampere or newer with 24 GB or more, e.g. AWS `g5.2xlarge` (A10G 24 GB, 8 vCPU) or `g6e.xlarge` (L40S 48 GB). Not `g4dn` (T4): Photon doesn't support it. New AWS accounts often have a quota of 0 vCPUs for "Running On-Demand G and VT instances"; request 8 in Service Quotas before you need it.
+2. **Instance.** Ubuntu 22.04 or 24.04 with NVIDIA drivers (AWS "Deep Learning Base OSS Nvidia Driver GPU AMI"), 100 GB disk. Security group: SSH from your IP only. The app has no login, so don't open port 8000 to the internet.
+3. **Set up** (once): clone the repository on the instance and run `bash deploy/setup_gpu.sh` in it. It installs ffmpeg and the Python packages, downloads the person model and writes a `.env` that points at the local Moondream server. `TENSORRT=1 bash deploy/setup_gpu.sh` also builds a TensorRT FP16 person detector (`models/yolo11s.engine`), which is about 3× faster than PyTorch on the GPU. Don't copy your laptop's `.env` there; it may hold AWS keys.
+4. **Start:** `bash deploy/start.sh`. It starts the Moondream server (the first start downloads the weights; log in `logs/moondream.log`), waits until it's ready, then starts the web app.
+5. **Open** it from your laptop through SSH: `ssh -L 8000:localhost:8000 ubuntu@<instance-ip>`, then http://localhost:8000.
+6. **Check the speed and answers** before a demo: `.venv/bin/python -m moondream_server.bench videos/<clip>.mp4` times real PPE checks against the endpoint in `.env`. It prints the time per check and per call, and what each worker was found to wear. Run it again with `--endpoint https://api.moondream.ai/v1` (and a Cloud key) to compare. `--concurrency 4` on `start.sh` lets the server run 4 calls at once; keep it if the bench is faster with it.
+7. Stop the instance when you're done; GPU instances are billed by the hour.
+
+Server options: `python -m moondream_server.serve --help` (`--backend hf` runs `moondream/moondream3-preview` with Hugging Face transformers if Photon won't install; `pip install transformers accelerate` first).
 
 ## Known limitations
 

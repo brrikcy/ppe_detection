@@ -214,3 +214,23 @@ def test_rerun_copies_the_video_and_chooses_the_settings(client, tmp_path):
     assert client.post(f"/api/runs/{again['meta']['id']}/rerun", json={"api_key": "bad-key"}).status_code == 401
     assert client.post(f"/api/runs/{again['meta']['id']}/rerun", json={"settings": "other"}).status_code == 422
     assert client.post("/api/runs/nope/rerun", json={}).status_code == 404
+
+
+def test_live_run_streams_frames(client, tmp_path):
+    r = _upload(client, tmp_path, required_ppe="helmet", live="true")
+    assert r.status_code == 201, r.text
+    run_id = r.json()["meta"]["id"]
+    assert r.json()["meta"]["options"]["live"] is True
+
+    deadline = time.time() + 10
+    while (m := client.get(f"/api/runs/{run_id}").json()["meta"])["progress"]["frames_done"] == 0:
+        assert m["status"] != "completed" and time.time() < deadline  # 25 frames at 10 fps take 2.5 s
+        time.sleep(0.05)
+    stream = client.get(f"/api/runs/{run_id}/live")  # ends with the run
+    assert stream.status_code == 200
+    assert stream.headers["content-type"].startswith("multipart/x-mixed-replace")
+    assert stream.content.count(b"--frame\r\nContent-Type: image/jpeg") > 3
+    assert b"\xff\xd8" in stream.content  # JPEG data
+
+    assert _wait(client, run_id)["meta"]["status"] == "completed"
+    assert client.get(f"/api/runs/{run_id}/live").status_code == 404  # finished: no stream

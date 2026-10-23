@@ -10,3 +10,7 @@ inputs/
 *.mkv
 runs/
 models/*.pt
+videos/
+models/*.engine
+models/*.onnx
+logs/

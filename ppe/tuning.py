@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .moondream_client import DEFAULT_MODEL
 
+MODEL_SUFFIXES = (".pt", ".engine", ".onnx")  # person-detection weights Ultralytics can load
+
 DEFAULT_QUESTION_TEMPLATE = (
     "Focus on the main person in the centre of this image. "
     "Is this person wearing {item}? Answer only yes or no."
@@ -197,8 +199,8 @@ class Tuning(BaseModel):
     @classmethod
     def _plain_file_name(cls, v: str) -> str:
         v = v.strip()
-        if v and ("/" in v or "\\" in v or v.startswith(".") or not v.endswith(".pt")):
-            raise ValueError("must be a .pt file name inside models/")
+        if v and ("/" in v or "\\" in v or v.startswith(".") or not v.endswith(MODEL_SUFFIXES)):
+            raise ValueError("must be a .pt, .engine (TensorRT) or .onnx file name inside models/")
         return v
 
     def question_for(self, item: str) -> str:

@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from ppe.config import PPE_CATALOG, Config
 from ppe.moondream_client import AuthError, ModelError
 from ppe.people import DEFAULT_MODEL, MODELS_DIR
-from ppe.tuning import Tuning
+from ppe.tuning import MODEL_SUFFIXES, Tuning
 
 from ...core.settings import Settings
 from ...schemas.runs import TryRequestResult, TuningState
@@ -40,7 +40,7 @@ def _state(active: Tuning, settings: Settings) -> TuningState:
         active=active,
         defaults=Tuning(),
         changes=active.changes(),
-        models=sorted(p.name for p in MODELS_DIR.glob("*.pt")) if MODELS_DIR.exists() else [],
+        models=sorted(p.name for p in MODELS_DIR.iterdir() if p.suffix in MODEL_SUFFIXES) if MODELS_DIR.exists() else [],
         default_model=Path(settings.person_model or DEFAULT_MODEL).name,
         moondream_endpoint=settings.moondream_endpoint,
     )

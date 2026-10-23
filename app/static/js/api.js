@@ -85,6 +85,7 @@ export const api = {
     video: (id, download = false) => `/api/runs/${encodeURIComponent(id)}/video${download ? "?download=true" : ""}`,
     report: (id) => `/api/runs/${encodeURIComponent(id)}/report`,
     preview: (id) => `/api/runs/${encodeURIComponent(id)}/preview?t=${Date.now()}`,
+    live: (id) => `/api/runs/${encodeURIComponent(id)}/live?t=${Date.now()}`,
     snapshot: (id, name) => `/api/runs/${encodeURIComponent(id)}/snapshots/${encodeURIComponent(name)}`,
     frame: (id, name) => `/api/runs/${encodeURIComponent(id)}/frames/${encodeURIComponent(name)}`,
     person: (id, name) => `/api/runs/${encodeURIComponent(id)}/people/${encodeURIComponent(name)}`,

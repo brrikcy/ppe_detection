@@ -109,7 +109,7 @@ const CARDS = [
     intro: "YOLO finds people on every frame; BoT-SORT keeps their IDs.",
     groups: [
       { title: "Finding people", fields: [
-        f("person_model", "model", "Detection model", "Bigger models find more partly hidden workers but are slower. Put .pt files in models/."),
+        f("person_model", "model", "Detection model", "Bigger models find more partly hidden workers but are slower. Put .pt, .engine (TensorRT) or .onnx files in models/."),
         f("detect_fps", "number", "Detect people",
           "How often the person detector runs; in between, boxes move on at their last speed. The detector is the slowest part of a run: 10 a second is about 3× faster than every frame of a 30 fps video. 0 = every frame.",
           { min: 0, max: 60, step: 1, unit: "times a second" }),

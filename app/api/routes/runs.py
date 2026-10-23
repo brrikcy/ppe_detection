@@ -12,7 +12,7 @@ import cv2
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ppe.config import parse_required
 
@@ -96,12 +96,14 @@ async def create_run(
     required_ppe: Annotated[str, Form(description="Comma separated, e.g. helmet,vest")] = "helmet,vest",
     analysis_interval_sec: Annotated[float, Form()] = 1.0,
     max_seconds: Annotated[float | None, Form()] = None,
+    live: Annotated[bool, Form()] = False,
 ) -> RunDetail:
     try:
         key, key_source = resolve_key(api_key, settings)
         options = RunOptions(required_ppe=parse_required(required_ppe),
                              analysis_interval_sec=analysis_interval_sec,
                              max_seconds=max_seconds or None,
+                             live=live,
                              tuning=dev.get())
     except (MissingKey, ValueError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
@@ -296,6 +298,22 @@ def get_report(run_id: str, store: Store) -> FileResponse:
 def get_preview(run_id: str, store: Store) -> FileResponse:
     _get_meta(store, run_id)
     return _file(store.paths(run_id).preview, "image/jpeg")
+
+
+@router.get("/{run_id}/live")
+def get_live(run_id: str, store: Store, runner: Runner) -> StreamingResponse:
+    """The annotated video as it's written, as an MJPEG stream (plays in an <img>); ends with the run."""
+    _get_meta(store, run_id)
+    feed = runner.feed(run_id)
+    if feed is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This run isn't running")
+
+    def parts():
+        for jpeg in feed.frames():
+            yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n%s\r\n" % (len(jpeg), jpeg)
+
+    return StreamingResponse(parts(), media_type="multipart/x-mixed-replace; boundary=frame",
+                             headers={"Cache-Control": "no-store"})
 
 
 def _image(store: RunStore, run_id: str, folder: str, name: str) -> FileResponse:

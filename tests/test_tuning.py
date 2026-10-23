@@ -30,7 +30,7 @@ BRIGHT = Image.fromarray(np.full((200, 120, 3), 200, np.uint8))  # FakeModel say
     {"items": {"helmet": {"question": "  ", "detect_term": "y"}}},
     {"detector_imgsz": 650},
     {"person_model": "../secrets.pt"},
-    {"person_model": "yolo.onnx"},
+    {"person_model": "yolo.txt"},
     {"vote_window": 0},
     {"crop_padding": 2},
 ])

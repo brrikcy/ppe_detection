@@ -89,6 +89,7 @@ export async function renderNewRun(root, { onCreated }) {
   const maxSec = h("input", { id: "max-seconds", class: "input", type: "number", min: "1", step: "1",
     placeholder: "Whole video", style: "max-width:160px", oninput: updateEstimate });
   const estimate = h("div", { class: "estimate" });
+  const liveBox = h("input", { type: "checkbox", name: "live", checked: true });
 
   function selectedItems() {
     return [...checks.querySelectorAll("input:checked")].map((i) => i.value);
@@ -147,6 +148,9 @@ export async function renderNewRun(root, { onCreated }) {
         h("div", { class: "field" },
           h("label", { class: "label", for: "max-seconds" }, "Only the first … seconds"),
           maxSec),
+        h("div", { class: "field" },
+          h("label", { class: "check" }, liveBox, "Live mode"),
+          h("span", { class: "hint" }, "Plays the video at normal speed while it's inspected. A worker's PPE tag can follow about a second behind.")),
         dev.changes.length ? h("div", { class: "field" }, h("div", { class: "dev-note" },
           `Developer settings: ${dev.changes.length} change${dev.changes.length === 1 ? "" : "s"} from the defaults will be used. `,
           h("a", { href: "#dev" }, "Review"))) : null,
@@ -169,6 +173,7 @@ export async function renderNewRun(root, { onCreated }) {
     body.append("required_ppe", items.join(","));
     body.append("analysis_interval_sec", String(interval()));
     if (Number(maxSec.value) > 0) body.append("max_seconds", String(Number(maxSec.value)));
+    body.append("live", String(liveBox.checked));
 
     runBtn.disabled = true;
     runBtn.textContent = "Uploading and checking key…";

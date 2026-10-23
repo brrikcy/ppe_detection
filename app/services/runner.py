@@ -35,10 +35,61 @@ PREVIEW_MAX_WIDTH = 1280
 SNAPSHOT_MAX_HEIGHT = 320
 PROGRESS_SAVE_INTERVAL_SEC = 0.5
 PREVIEW_INTERVAL_SEC = 0.4  # live preview refresh while frames are written
+STREAM_JPEG_QUALITY = 75
+STREAM_POLL_SEC = 1.0  # a stream with no new frame checks this often whether the run has ended
 
 
 def default_analyzer_factory(config: Config) -> PPEAnalyzer:
     return PPEAnalyzer(config)
+
+
+class LiveFeed:
+    """The latest frame written by a running run, as JPEG, for the MJPEG stream.
+
+    Frames are only encoded while someone is watching.
+    """
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._jpeg: bytes | None = None
+        self._seq = 0
+        self._closed = False
+        self.viewers = 0
+
+    def push(self, img) -> None:
+        h, w = img.shape[:2]
+        if w > PREVIEW_MAX_WIDTH:
+            img = cv2.resize(img, (PREVIEW_MAX_WIDTH, int(h * PREVIEW_MAX_WIDTH / w)))
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, STREAM_JPEG_QUALITY])
+        if not ok:
+            return
+        with self._cond:
+            self._jpeg, self._seq = buf.tobytes(), self._seq + 1
+            self._cond.notify_all()
+
+    def close(self) -> None:
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
+
+    def frames(self):
+        """Yields each new frame until the run ends."""
+        with self._cond:
+            self.viewers += 1
+        try:
+            seq = 0
+            while True:
+                with self._cond:
+                    self._cond.wait_for(lambda: self._seq != seq or self._closed, timeout=STREAM_POLL_SEC)
+                    if self._closed:
+                        return
+                    if self._seq == seq:
+                        continue
+                    seq, jpeg = self._seq, self._jpeg
+                yield jpeg
+        finally:
+            with self._cond:
+                self.viewers -= 1
 
 
 class RunRunner:
@@ -52,6 +103,7 @@ class RunRunner:
         self.moondream_endpoint = moondream_endpoint
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="run")
         self._live: dict[str, list[dict]] = {}  # timeline so far for active runs
+        self._feeds: dict[str, LiveFeed] = {}  # frames as they're written, for active runs
         self._live_lock = threading.Lock()
 
     def submit(self, run_id: str, api_key: str) -> None:
@@ -61,7 +113,12 @@ class RunRunner:
     def live_timeline(self, run_id: str) -> list[dict] | None:
         with self._live_lock:
             entries = self._live.get(run_id)
-            return list(entries) if entries is not None else None
+            # Live mode can record a check after later ones; the summary expects frame order.
+            return sorted(entries, key=lambda e: e["frame"]) if entries is not None else None
+
+    def feed(self, run_id: str) -> LiveFeed | None:
+        with self._live_lock:
+            return self._feeds.get(run_id)
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -79,8 +136,10 @@ class RunRunner:
             tuning=opts.tuning,
             moondream_endpoint=self.moondream_endpoint,
         )
+        feed = LiveFeed()
         with self._live_lock:
             self._live[run_id] = []
+            self._feeds[run_id] = feed
         progress = Progress(frames_total=meta.video.frame_count)
         self.store.update(run_id, status=RunStatus.running, progress=progress)
 
@@ -120,6 +179,8 @@ class RunRunner:
         def on_frame(idx: int, annotated) -> None:
             # The live page shows the annotated video as it's written, not just one still per check.
             nonlocal last_preview
+            if feed.viewers:
+                feed.push(annotated)
             now = time.monotonic()
             if now - last_preview < PREVIEW_INTERVAL_SEC:
                 return
@@ -140,7 +201,8 @@ class RunRunner:
         try:
             process_video(paths.input(), paths.output, analyzer, max_seconds=opts.max_seconds,
                           on_progress=on_progress, on_analysed=on_analysed,
-                          people_factory=self.people_factory, on_frame=on_frame, on_check=on_check)
+                          people_factory=self.people_factory, on_frame=on_frame, on_check=on_check,
+                          live=opts.live)
             progress.frames_done = progress.frames_total = max(progress.frames_done, 1)
             self.store.update(run_id, status=RunStatus.completed, progress=progress,
                               finished_at=datetime.now(timezone.utc))
@@ -154,8 +216,10 @@ class RunRunner:
             self._fail(run_id, str(exc) or exc.__class__.__name__)
         finally:
             analyzer.close()
+            feed.close()
             with self._live_lock:
                 self._live.pop(run_id, None)
+                self._feeds.pop(run_id, None)
 
     def _fail(self, run_id: str, message: str) -> None:
         self.store.update(run_id, status=RunStatus.failed, error=message,

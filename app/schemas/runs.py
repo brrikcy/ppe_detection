@@ -26,6 +26,8 @@ class RunOptions(BaseModel):
     required_ppe: list[str] = Field(default_factory=lambda: ["helmet", "vest"])
     analysis_interval_sec: float = Field(1.0, gt=0, le=30)
     max_seconds: float | None = Field(None, gt=0)
+    # Play at the video's own speed and stream it; PPE labels may follow ~1s behind (ppe.video).
+    live: bool = False
     # Developer settings in force when the run was created (defaults for older runs).
     tuning: Tuning = Field(default_factory=Tuning)
 

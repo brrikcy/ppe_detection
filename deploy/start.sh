@@ -5,6 +5,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p logs
+# The AWS Deep Learning AMI puts its own, older cuDNN on LD_LIBRARY_PATH; it shadows the one PyTorch
+# ships with and GPU convolutions fail (CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED).
+unset LD_LIBRARY_PATH
 
 .venv/bin/python -m moondream_server.serve "$@" > logs/moondream.log 2>&1 &
 MOONDREAM_PID=$!

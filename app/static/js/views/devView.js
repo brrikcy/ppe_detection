@@ -162,6 +162,15 @@ function rememberView(v) {
   try { localStorage.setItem(VIEW_KEY, v); } catch { /* private window: just not remembered */ }
 }
 
+// Sections the viewer folded, remembered in this browser.
+const FOLDED_KEY = "ppe.devFolded";
+function savedFolded() {
+  try { return new Set(JSON.parse(localStorage.getItem(FOLDED_KEY) || "[]")); } catch { return new Set(); }
+}
+function rememberFolded(ids) {
+  try { localStorage.setItem(FOLDED_KEY, JSON.stringify([...ids])); } catch { /* not remembered */ }
+}
+
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -201,6 +210,8 @@ export async function renderDev(root) {
     } catch (e) {
       errorBox.replaceChildren(h("h3", {}, "Not saved"), h("p", { style: "white-space:pre-line" }, e.message));
       errorBox.hidden = false;
+      // An invalid setting may be in a folded section: open it so its note can be seen.
+      sections.forEach((sec) => { if (sec.body.querySelector(".row-note.is-error:not([hidden])")) sec.setOpen(true); });
       errorBox.scrollIntoView({ behavior: "smooth", block: "center" });
     }
     refreshBar();
@@ -397,11 +408,54 @@ export async function renderDev(root) {
   const playground = await buildPlayground(() => draft);
   playground.id = "dev-playground";
 
+  // ---- expandable sections ---------------------------------------------------------
+  // The section title becomes a button that folds the section; folded sections show how
+  // many of their settings differ from the defaults, so changes don't disappear from view.
+  const folded = savedFolded();
+  function collapsible(section) {
+    const id = section.id.replace(/^dev-/, "");
+    const head = section.querySelector(":scope > .card-head");
+    const body = h("div", { class: "card-body", id: `${section.id}-body` },
+      ...[...section.childNodes].filter((n) => n !== head));
+    const h2 = head.querySelector("h2");
+    const count = h("span", { class: "fold-count", hidden: true });
+    const toggle = h("button", { type: "button", class: "fold-toggle", "aria-controls": body.id,
+      onclick: () => setOpen(body.hidden) }, h("span", { class: "chevron", "aria-hidden": "true" }), h2.textContent);
+    h2.replaceChildren(toggle, count);
+    // Clicking the description under the title folds too.
+    head.addEventListener("click", (e) => { if (!e.target.closest("button, a, input, select")) setOpen(body.hidden); });
+    section.append(body);
+    section.classList.add("is-foldable");
+    function refreshCount() {
+      const n = [...body.querySelectorAll(".set-row")].filter((r) => r.querySelector(".changed-dot:not([hidden])")).length;
+      count.hidden = !n || !body.hidden;
+      count.textContent = `${n} changed`;
+    }
+    function setOpen(open) {
+      body.hidden = !open;
+      section.classList.toggle("is-folded", !open);
+      toggle.setAttribute("aria-expanded", String(open));
+      if (open) folded.delete(id); else folded.add(id);
+      rememberFolded(folded);
+      refreshCount();
+    }
+    setOpen(!folded.has(id));
+    controls.push({ refresh: refreshCount });
+    return { id, body, setOpen };
+  }
+  const sections = [playground, promptCard, itemsCard, cards.rules, cards.voting, cards.requests, cards.tracking]
+    .map(collapsible);
+
   const nav = h("nav", { class: "dev-nav", "aria-label": "Sections" },
     [["playground", "Playground"], ["prompts", "Prompts"], ["items", "PPE items"], ["rules", "Decision rules"],
       ["voting", "Status and voting"], ["requests", "Requests"], ["tracking", "Tracking"]]
-      .map(([id, label]) => h("button", { type: "button", onclick: () => document.getElementById(`dev-${id}`)
-        ?.scrollIntoView({ behavior: "smooth", block: "start" }) }, label)));
+      .map(([id, label]) => h("button", { type: "button", onclick: () => {
+        sections.find((x) => x.id === id)?.setOpen(true);
+        document.getElementById(`dev-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } }, label)),
+    h("span", { class: "nav-sep", "aria-hidden": "true" }),
+    h("button", { type: "button", class: "fold-all", onclick: () => sections.forEach((x) => x.setOpen(true)) }, "Expand all"),
+    h("button", { type: "button", class: "fold-all", onclick: () => sections.forEach((x) => x.setOpen(false)) }, "Collapse all"));
 
   const page = h("div", { class: "page dev-page" });
   const viewButtons = [["stacked", "Stacked"], ["list", "List"]].map(([v, label]) => h("button", {

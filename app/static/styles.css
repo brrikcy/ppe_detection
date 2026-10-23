@@ -432,3 +432,16 @@ select.input { font-family: var(--body); }
 .is-stacked .item-panel .set-row .set-control > .input:not(.num-input) { flex: 1; }
 .is-stacked .set-row:not(.is-wide):not(.is-toggle) .set-control > .input:not(.num-input) { max-width: 100%; }
 .set-rows > .item-panel-title + .set-row { border-top: 0; }
+
+/* Foldable Developer options sections. */
+.is-foldable > .card-head { cursor: pointer; }
+.is-foldable > .card-head h2 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fold-toggle { display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.fold-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.chevron { width: 8px; height: 8px; margin: 0 3px 4px 2px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .15s; flex: none; }
+.is-folded .chevron { margin: 0 4px 0 0; transform: rotate(-45deg); }
+.fold-count { padding: 2px 8px; border-radius: 10px; background: var(--accent-soft); color: var(--fg); font: 500 12px var(--body); }
+.is-folded > .card-head { margin-bottom: 0; }
+.dev-nav .nav-sep { width: 1px; height: 18px; margin: 0 4px; align-self: center; background: var(--line-strong); }
+.dev-nav .fold-all { color: var(--info); }
+@media (prefers-reduced-motion: reduce) { .chevron { transition: none; } }

@@ -33,7 +33,7 @@ async function refreshSidebar() {
   }
   const route = currentRoute();
   devLink.setAttribute("aria-current", route.name === "dev" ? "page" : "false");
-  newLink.setAttribute("aria-current", route.name === "new" ? "page" : "false");
+  newLink?.setAttribute("aria-current", route.name === "new" ? "page" : "false"); // absent in a page cached from an older version
   count.textContent = runs.length ? String(runs.length) : "";
   list.replaceChildren(...(runs.length ? runs.map((r) => {
     const active = r.status === "running" || r.status === "queued";

@@ -15,7 +15,7 @@ It comes as a web app with a results dashboard (`run.py`) and a command-line too
 ## How it works
 
 1. **Every frame: find and track people** (`ppe/people.py`).
-   - YOLO11s finds people (the frame is scaled to 640px for this), and BoT-SORT links them over time, so each worker keeps one ID.
+   - YOLO11s finds people (the frame is scaled to 640px for this) 10 times a second, and BoT-SORT links them over time, so each worker keeps one ID. In between detections each box moves on at its last measured speed; detection is the slowest part of a run, and this makes tracking about 3× faster with boxes within a few percent of detecting on every frame (setting: **Detect people … times a second**).
    - BoT-SORT predicts motion with a Kalman filter and corrects for camera motion (turn this off with **Fixed camera**). It also uses weak detections to keep a partly hidden worker.
    - A lost worker keeps their ID for 8 seconds. Tracks younger than 0.3s are treated as flicker and not shown. When the detector misses someone for a few frames, their last box stays on screen for up to 0.5s instead of blinking off.
 2. **Every check interval (default 1s): check PPE** (`ppe/analyzer.py`). Every tracked worker who has been on screen for at least 1 second is cropped, and Moondream `query` is asked a yes/no question for each required PPE item (or, optionally, one question for all items). These calls run in parallel.
@@ -42,7 +42,16 @@ curl -L --create-dirs -o models/yolo11s.pt https://github.com/ultralytics/assets
 
 On Windows PowerShell, type `curl.exe` instead of `curl`; plain `curl` there is a different command. Use `copy` instead of `cp`.
 
-The person model (about 19 MB) is loaded from `models/yolo11s.pt`; if it's missing, it is downloaded on first use, and if that fails the run stops with the download command. Set `PERSON_MODEL` in `.env`, or pick a model in Developer options, to use other YOLO weights. YOLO11n (`yolo11n.pt`, 5 MB) is faster but found 30% fewer people in our test video. Ultralytics is AGPL-3.0. It runs on the CPU unless PyTorch finds a GPU; on our test machine, tracking took about 170 ms per 1080p frame with YOLO11s (100 ms with YOLO11n).
+The person model (about 19 MB) is loaded from `models/yolo11s.pt`; if it's missing, it is downloaded on first use, and if that fails the run stops with the download command. Set `PERSON_MODEL` in `.env`, or pick a model in Developer options, to use other YOLO weights. YOLO11n (`yolo11n.pt`, 5 MB) is faster but found 30% fewer people in our test video. Ultralytics is AGPL-3.0. It runs on the CPU unless PyTorch finds a GPU. The server loads it when it starts, so the first run doesn't wait for it.
+
+**Speed.** On our 4-core test machine (CPU only), an 8-second 1080p clip (two items, up to 5 workers) takes about 30 s, down from 90 s before these optimisations:
+
+| Step | Per frame | Notes |
+|---|---|---|
+| Reading the video | ~9 ms | ffmpeg decodes in its own process (OpenCV, the fallback, took 41 ms) |
+| Person detection + tracking | ~50 ms on average | YOLO11s 10 times a second (170 ms when it runs); **Fixed camera** saves about 30 ms more; YOLO11n roughly halves it |
+| Moondream | ~0.5 s per call, 3 calls per worker check | runs while the next frames are tracked; frames wait (up to 512 MB) until their check is in, so the video is the same as checking before moving on |
+| Writing the video | ~20 ms | H.264 in ffmpeg |
 
 If `opencv-python-headless` is already installed, Ultralytics' `opencv-python` dependency overwrites the same `cv2` files. Either keep one of the two, or install Ultralytics with `pip install --no-deps ultralytics` and add its other dependencies by hand.
 

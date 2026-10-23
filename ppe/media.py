@@ -139,3 +139,78 @@ class FrameWriter:
     def _error(self) -> str:
         self._stderr.seek(0)
         return self._stderr.read().decode(errors="replace")[-500:].strip()
+
+
+class FrameReader:
+    """Reads the BGR frames of `src` in order.
+
+    Decoding goes through ffmpeg when it's available: a separate, multi-threaded process
+    that is several times faster than OpenCV for HD video and runs alongside person
+    detection. Its first frame is compared with OpenCV's, and OpenCV decodes instead if they
+    differ (e.g. a rotation flag one of them ignores) or ffmpeg can't read the file.
+    """
+
+    MAX_MEAN_DIFF = 8.0  # per pixel, 0-255; compression differences between decoders are ~1
+
+    def __init__(self, src: Path):
+        self.src = str(src)
+        cap = cv2.VideoCapture(self.src)
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video: {src}")
+        self.fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        self.frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        ok, first = cap.read()
+        cap.release()
+        if not ok:
+            raise RuntimeError(f"No frames could be decoded from {src}")
+        self.height, self.width = first.shape[:2]
+        self._frame_bytes = self.width * self.height * 3
+        self._proc = self._cap = None
+        self._pending = None  # first ffmpeg frame, already read for the comparison
+        ffmpeg = find_ffmpeg()
+        if ffmpeg:
+            self._proc = subprocess.Popen(
+                [ffmpeg, "-loglevel", "error", "-nostdin", "-threads", "0", "-i", self.src, "-map", "0:v:0",
+                 "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=self._frame_bytes * 2)
+            frame = self._read_ffmpeg()
+            if frame is None or float(cv2.absdiff(frame, first).mean()) > self.MAX_MEAN_DIFF:
+                log.info("ffmpeg frames don't match OpenCV's for %s; decoding with OpenCV", src)
+                self._stop_ffmpeg()
+            else:
+                self._pending = frame
+        if self._proc is None:
+            self._cap = cv2.VideoCapture(self.src)
+        self.decoder = "ffmpeg" if self._proc else "opencv"
+
+    def _read_ffmpeg(self):
+        import numpy as np
+
+        buf = self._proc.stdout.read(self._frame_bytes)
+        if len(buf) < self._frame_bytes:
+            return None
+        return np.frombuffer(buf, np.uint8).reshape(self.height, self.width, 3).copy()
+
+    def read(self):
+        """The next frame, or None at the end of the video."""
+        if self._cap is not None:
+            ok, frame = self._cap.read()
+            return frame if ok else None
+        if self._pending is not None:
+            frame, self._pending = self._pending, None
+            return frame
+        return self._read_ffmpeg()
+
+    def _stop_ffmpeg(self) -> None:
+        if self._proc is not None:
+            if self._proc.poll() is None:
+                self._proc.kill()
+            self._proc.stdout.close()
+            self._proc.wait()
+            self._proc = None
+
+    def close(self) -> None:
+        self._stop_ffmpeg()
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None

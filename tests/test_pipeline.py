@@ -259,3 +259,46 @@ def test_tags_do_not_overlap():
     green = (col == (40, 180, 40)).all(axis=1)
     red_rows, green_rows = set(np.flatnonzero(red)), set(np.flatnonzero(green))
     assert len(red_rows) > 5 and len(green_rows) > 5 and not (red_rows & green_rows)
+
+
+def test_slow_moondream_gives_the_same_report(tmp_path):
+    """Tracking runs ahead while checks are with Moondream; frames are held back until their
+    check is in, so a slow Moondream must not change anything in the output."""
+    import time
+
+    class Slow(FakeModel):
+        def query(self, image, question):
+            time.sleep(0.05)
+            return super().query(image, question)
+
+    schedule = lambda i: [(1, LEFT)] + ([(2, RIGHT)] if 3 <= i <= 22 else [])
+    reports = []
+    for model in (FakeModel(), Slow()):
+        src = write_video(tmp_path / "in.mp4", frames=40)
+        a = PPEAnalyzer(make_cfg(crop_padding=0.0, analysis_interval_sec=0.5, min_check_age_sec=0), model=model)
+        reports.append(process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: FakePeople(schedule)))
+        a.close()
+    fast, slow = reports
+    assert slow["timeline"] == fast["timeline"] and slow["frames_written"] == fast["frames_written"] == 40
+    assert [e["frame"] for e in fast["timeline"]] == [0, 5, 10, 15, 20, 25, 30, 35]
+
+
+def test_frame_reader_matches_opencv(tmp_path, monkeypatch):
+    import ppe.media as media
+
+    src = write_video(tmp_path / "in.mp4", frames=12)
+    have_ffmpeg = media.find_ffmpeg() is not None
+    for use_ffmpeg in (True, False):
+        if not use_ffmpeg:
+            monkeypatch.setattr(media, "find_ffmpeg", lambda: None)
+        r = media.FrameReader(src)
+        assert r.decoder == ("ffmpeg" if use_ffmpeg and have_ffmpeg else "opencv")
+        cap = cv2.VideoCapture(str(src))
+        n = 0
+        while (f := r.read()) is not None:
+            ok, g = cap.read()
+            assert ok and f.shape == g.shape and cv2.absdiff(f, g).mean() < 1
+            n += 1
+        r.close()
+        cap.release()
+        assert n == 12 and (r.width, r.height) == (400, 200)

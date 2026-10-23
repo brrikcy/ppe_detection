@@ -128,6 +128,7 @@ class Tuning(BaseModel):
     # --- Person tracking (YOLO + BoT-SORT) -----------------------------------------
     person_model: str = Field("", max_length=120)  # file in models/; "" = server default
     detector_imgsz: int = Field(640, ge=320, le=1920)
+    detect_fps: float = Field(10.0, ge=0, le=60)  # person detections per second; 0 = every frame
     detector_conf: float = Field(0.1, ge=0.01, le=0.9)
     new_track_thresh: float = Field(0.5, ge=0.05, le=0.95)
     min_track_age_sec: float = Field(0.3, ge=0, le=3)

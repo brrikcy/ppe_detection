@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -43,6 +44,11 @@ def create_app(settings: Settings | None = None,
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.store.mark_interrupted()
+        if people_factory is None and settings.warm_up_detector:
+            # Load the person detector now, so the first run doesn't spend seconds warming it up.
+            from ppe.people import warm_up
+
+            threading.Thread(target=warm_up, args=(settings.person_model,), daemon=True).start()
         yield
         app.state.runner.shutdown()
 

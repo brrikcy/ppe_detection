@@ -110,6 +110,9 @@ const CARDS = [
     groups: [
       { title: "Finding people", fields: [
         f("person_model", "model", "Detection model", "Bigger models find more partly hidden workers but are slower. Put .pt files in models/."),
+        f("detect_fps", "number", "Detect people",
+          "How often the person detector runs; in between, boxes move on at their last speed. The detector is the slowest part of a run: 10 a second is about 3× faster than every frame of a 30 fps video. 0 = every frame.",
+          { min: 0, max: 60, step: 1, unit: "times a second" }),
         f("detector_imgsz", "select", "Detector input size", "Frames are scaled to this. Larger finds smaller people but is slower.",
           { numeric: true, options: [320, 480, 640, 800, 960, 1280, 1600, 1920].map((v) => [v, `${v} px`]) }),
         f("detector_conf", "number", "Detection confidence", "Weakest detection the tracker considers. Low values help keep partly hidden workers.",

@@ -7,7 +7,7 @@ from PIL import Image
 from ppe.analyzer import PPEAnalyzer, WorkerResult, _is_yes, _parse_multi
 from ppe.status import PersonStatus
 from ppe.tuning import Tuning
-from ppe.video import process_video
+from ppe.video import CHECKS_IN_FLIGHT, process_video
 
 from .test_pipeline import LEFT, RIGHT, FakeModel, FakePeople, make_cfg, write_video
 
@@ -180,25 +180,22 @@ def test_run_stops_after_failed_checks_in_a_row(tmp_path):
     with pytest.raises(RuntimeError, match="3 checks in a row"):
         process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: FakePeople())
     a.close()
-    assert Down.calls == 6  # 3 check frames x 2 workers, no retries in between
+    # 3 check frames x 2 workers, no retries in between; checks already sent to Moondream
+    # while those failed (tracking doesn't wait) may add up to CHECKS_IN_FLIGHT more frames.
+    assert 6 <= Down.calls <= 6 + 2 * CHECKS_IN_FLIGHT
 
 
 # ---- [S4] [T2] scheduling --------------------------------------------------------------------
 def queried_frames(tmp_path, schedule, interval=1.0, frames=25, **tuning):
-    frames_seen = []
-
-    class Counting(FakeModel):
-        def query(self, image, question):
-            if np.asarray(image).mean() > 150:  # right-hand worker
-                frames_seen.append(people.i - 1)
-            return super().query(image, question)
+    """Frames at which worker 2 was checked (asked about), from the report."""
     people = FakePeople(schedule)
     src = write_video(tmp_path / "in.mp4", frames=frames)
     a = PPEAnalyzer(make_cfg(crop_padding=0.0, required_ppe=["helmet"], analysis_interval_sec=interval,
-                             parallel_requests=1, **tuning), model=Counting())
-    process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: people)
+                             parallel_requests=1, **tuning), model=FakeModel())
+    report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: people)
     a.close()
-    return frames_seen
+    return [e["frame"] for e in report["timeline"] for w in e["workers"]
+            if w["track_id"] == 2 and not w["too_small"] and not w["pending"]]
 
 
 def test_new_track_waits_before_its_first_check(tmp_path):

@@ -99,7 +99,9 @@ def _load_image(data: bytes) -> Image.Image:
         img = Image.open(io.BytesIO(data))
         img.load()
         return img.convert("RGB")
-    except (UnidentifiedImageError, OSError):
+    except (UnidentifiedImageError, OSError, ImportError):
+        # ImportError: once Ultralytics is loaded, it hooks HEIF support into Pillow and an
+        # unreadable file can fail on that optional plugin instead.
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Couldn't read that image")
 
 

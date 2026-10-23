@@ -242,6 +242,8 @@ Runs the app and Moondream itself on one GPU machine, so PPE checks don't go ove
 6. **Check the speed and answers** before a demo: `.venv/bin/python -m moondream_server.bench videos/<clip>.mp4` times real PPE checks against the endpoint in `.env`. It prints the time per check and per call, and what each worker was found to wear. Run it again with `--endpoint https://api.moondream.ai/v1` (and a Cloud key) to compare. `--concurrency 4` on `start.sh` lets the server run 4 calls at once; keep it if the bench is faster with it.
 7. Stop the instance when you're done; GPU instances are billed by the hour.
 
+Our AWS instance, and how to start, stop or recreate it: [deploy/AWS.md](deploy/AWS.md).
+
 Server options: `python -m moondream_server.serve --help` (`--backend hf` runs `moondream/moondream3-preview` with Hugging Face transformers if Photon won't install; `pip install transformers accelerate` first).
 
 ## Known limitations

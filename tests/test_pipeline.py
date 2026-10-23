@@ -88,7 +88,8 @@ class OccludedModel:
         return {"objects": [box] if obj == "high visibility vest" else []}
 
     def query(self, image, question):
-        return {"answer": "no"}
+        # "no" to the PPE questions; "yes" when asked whether the detected vest really is one.
+        return {"answer": "yes" if question.startswith("Is this a") else "no"}
 
 
 def test_no_answer_is_confirmed_with_detect():
@@ -185,7 +186,7 @@ def test_newcomer_is_checked_on_arrival(tmp_path):
             calls.append(np.asarray(image).mean() > 150)
             return super().query(image, question)
 
-    a = PPEAnalyzer(make_cfg(crop_padding=0.0, required_ppe=["helmet"]), model=Counting())
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0, required_ppe=["helmet"], min_check_age_sec=0), model=Counting())
     people = FakePeople(lambda i: [(1, LEFT)] + ([(2, RIGHT)] if i >= 2 else []))
     report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: people)
     a.close()
@@ -201,7 +202,7 @@ def test_newcomer_is_checked_on_arrival(tmp_path):
 def test_worker_who_leaves_before_next_check_is_reported(tmp_path):
     # Worker 2 is only on screen for frames 2-6, between the checks at 0 and 10.
     src = write_video(tmp_path / "in.mp4")
-    a = PPEAnalyzer(make_cfg(crop_padding=0.0, required_ppe=["helmet"]), model=FakeModel())
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0, required_ppe=["helmet"], min_check_age_sec=0), model=FakeModel())
     people = FakePeople(lambda i: [(1, LEFT)] + ([(2, RIGHT)] if 2 <= i <= 6 else []))
     report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: people)
     a.close()
@@ -210,14 +211,17 @@ def test_worker_who_leaves_before_next_check_is_reported(tmp_path):
 
     s = build_summary(report["timeline"])
     people_ids = {p.id: p for p in s.people}
-    assert people_ids[2].checks == 1 and people_ids[2].status_label == "PPE Violation (1) - No Helmet"
-    assert [e.track_id for e in s.events] == [2]
+    # One check isn't enough for a verdict: listed as seen briefly, with what that check found.
+    assert people_ids[2].checks == 1 and people_ids[2].state == "brief"
+    assert people_ids[2].status_label == "Seen briefly"
+    assert [(t.label, t.count) for t in people_ids[2].missing] == [("No Helmet", 1)]
+    assert s.events == []
     assert s.frames_analysed == 3 and s.arrival_checks == 1
     # The timeline chart only has the regular checks, where worker 2 isn't on screen.
     assert [(p.time_sec, p.workers, p.violations) for p in s.timeline] == [(0, 1, 0), (1, 1, 0), (2, 1, 0)]
 
 
-def test_failed_check_is_skipped_not_repeated(tmp_path):
+def test_failed_check_is_recorded_and_not_retried_every_frame(tmp_path):
     src = write_video(tmp_path / "in.mp4")
 
     class FlakyOnce(FakeModel):
@@ -234,9 +238,12 @@ def test_failed_check_is_skipped_not_repeated(tmp_path):
                     model=FlakyOnce())
     report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: FakePeople())
     a.close()
-    # The first check failed, so there is no entry for frame 0 (rather than a stale copy).
-    # Nobody has a verdict yet, so frame 1 checks them as newcomers.
-    assert [(e["frame"], e["arrival"]) for e in report["timeline"]] == [(1, True), (10, False), (20, False)]
+    # One worker's check failed at frame 0; the other worker's result is kept. The failed
+    # worker waits for the next regular check instead of being retried on every frame.
+    assert [(e["frame"], e["arrival"]) for e in report["timeline"]] == [(0, False), (10, False), (20, False)]
+    first = report["timeline"][0]["workers"]
+    assert sorted(w["check_failed"] for w in first) == [False, True]
+    assert report["failed_checks"] == 1 and report["worker_checks"] == 6
 
 
 def test_tags_do_not_overlap():

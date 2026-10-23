@@ -63,7 +63,7 @@ def _overlaps(a, b) -> bool:
 
 def _draw_summary(frame, results, scale, thickness) -> tuple[int, int, int, int]:
     """Draws the counts bar at the top left; returns its rectangle."""
-    bad = sum(bool(r.violations) for r in results)
+    bad = sum(bool(r.violations) and not r.too_small for r in results)
     ok = sum(not r.violations and not r.too_small and not r.pending for r in results)
     text = f"Workers: {len(results)}  |  PPE OK: {ok}  |  Violations: {bad}"
     (tw, th), base = cv2.getTextSize(text, FONT, scale, thickness)

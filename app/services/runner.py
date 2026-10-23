@@ -95,16 +95,18 @@ class RunRunner:
 
         best_area: dict[int, int] = {}
 
-        def on_analysed(entry: dict, frame, results: list[WorkerResult]) -> None:
+        def on_analysed(entry: dict, frame, results: list[WorkerResult], display: list[WorkerResult]) -> None:
             arrival = entry.get("arrival", False)
             if not arrival:
                 progress.frames_analysed += 1  # counts regular checks, like the report
             try:
                 self._save_people(paths.people, frame, results, best_area)
                 self._save_snapshots(paths.snapshots, entry["frame"], frame, results)
+                # The preview and frame images show the boxes as drawn in the video (voted status).
                 # An arrival check only has the newcomers, so it doesn't replace the live preview.
-                self._save_preview(paths.preview, frame, results,
+                self._save_preview(paths.preview, frame, display,
                                    violation_copy=paths.frames / frame_name(entry["frame"]),
+                                   keep_copy=any(not r.ok for r in results) or any(r.violations for r in display),
                                    update_preview=not arrival)
             except OSError:
                 # e.g. Windows refuses to replace preview.jpg while the browser is fetching it.
@@ -138,13 +140,13 @@ class RunRunner:
                           finished_at=datetime.now(timezone.utc))
 
     @staticmethod
-    def _save_preview(path, frame, results, violation_copy=None, update_preview=True) -> None:
-        """Latest annotated frame for the live view; also kept under frames/ if it has a violation."""
+    def _save_preview(path, frame, results, violation_copy=None, keep_copy=False, update_preview=True) -> None:
+        """Latest annotated frame for the live view; also kept under frames/ when `keep_copy`."""
         img = draw_results(frame.copy(), results)
         h, w = img.shape[:2]
         if w > PREVIEW_MAX_WIDTH:
             img = cv2.resize(img, (PREVIEW_MAX_WIDTH, int(h * PREVIEW_MAX_WIDTH / w)))
-        if violation_copy is not None and any(not r.ok for r in results):
+        if violation_copy is not None and keep_copy:
             violation_copy.parent.mkdir(exist_ok=True)
             cv2.imwrite(str(violation_copy), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if update_preview:

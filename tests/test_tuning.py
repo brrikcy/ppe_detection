@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 from app.core.settings import Settings
 from app.main import create_app
-from app.services.summary import build_people
 from ppe.analyzer import PPEAnalyzer, WorkerResult
 from ppe.config import Config
 from ppe.status import PersonStatus
@@ -45,8 +44,9 @@ def test_missing_items_fall_back_to_defaults_and_changes_are_listed():
                crop_padding=0.2)
     assert t.items["vest"] == Tuning().items["vest"]
     assert t.items["helmet"].body_part is None
+    # Fields not given keep the item's defaults (e.g. its region and size limits).
     assert set(t.changes()) == {"crop_padding", "items.helmet.question", "items.helmet.detect_term",
-                                "items.helmet.body_part", "items.helmet.region_top", "items.helmet.region_bottom"}
+                                "items.helmet.body_part"}
     assert Tuning().changes() == []
 
 
@@ -105,17 +105,18 @@ def test_min_check_height_and_padding():
     assert far.too_small
 
 
-def test_vote_window_and_flag_ratio():
-    s = PersonStatus(window=1)
+def test_vote_window_and_confirm_checks():
+    s = PersonStatus(window=1, confirm=1)
     s.add(WorkerResult((0, 0, 1, 1), ["No Vest"]), 0)
     assert s.display(1, (0, 0, 1, 1), False).violations == ["No Vest"]  # no smoothing with window 1
 
-    def e(t, v):
-        return {"frame": t, "time_sec": t, "workers": [{"track_id": 1, "box": [0, 0, 1, 1], "violations": v,
-                                                       "unverified": []}]}
-    tl = [e(0, ["No Vest"]), e(1, []), e(2, []), e(3, [])]  # missing in 1 of 4 checks
-    assert build_people(tl, set())[0].ok
-    assert not build_people(tl, set(), flag_ratio=0.2)[0].ok
+    s = PersonStatus(window=3, confirm=2)
+    s.add(WorkerResult((0, 0, 1, 1), ["No Vest"]), 0)
+    assert s.display(1, (0, 0, 1, 1), False).pending  # one check: no verdict yet
+    s.add(WorkerResult((0, 0, 1, 1), ["No Vest"]), 1)
+    assert s.display(1, (0, 0, 1, 1), False).violations == ["No Vest"]
+    with pytest.raises(ValidationError):
+        Tuning(vote_window=2, confirm_checks=3)
 
 
 # ---- API ---------------------------------------------------------------------------
@@ -173,6 +174,15 @@ def test_runs_keep_the_settings_they_were_started_with(client):
     r = client.post("/api/dev/try", data={"item": "helmet", "run_id": rid, "folder": "people", "name": photo})
     assert r.status_code == 200, r.text
     assert r.json()["steps"][0]["question"].startswith("Focus on")  # saved settings were reset
+    assert r.json()["mode"] == "image"  # a person photo has no frame to go back to
+    # A violation snapshot is re-checked on the original frame, with the worker's box and neighbour.
+    snap = d["summary"]["events"][0]["snapshot"]
+    r = client.post("/api/dev/try", data={"item": "helmet", "run_id": rid, "folder": "snapshots", "name": snap})
+    body = r.json()
+    assert r.status_code == 200, body
+    assert body["mode"] == "run" and "1 other worker" in body["note"]
+    assert body["status"] == "missing" and body["image"].startswith("data:image/jpeg;base64,")
+    assert body["image_size"] == [132, 166]  # the 120x150 right-hand worker with 5% padding each side
 
 
 def test_try_with_upload_and_unsaved_settings(client):

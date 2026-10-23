@@ -79,8 +79,12 @@ def test_full_run_lifecycle(client, tmp_path):
     s = body["summary"]
     assert s["frames_analysed"] == 3
     assert s["peak_workers"] == 2
-    assert s["violation_checks"] == 3
-    assert {t["label"]: t["count"] for t in s["by_type"]} == {"No Helmet": 3, "No Vest": 3}
+    # The first check of each worker only starts their vote; the next two confirm the violation.
+    assert (s["violation_checks"], s["pending_checks"], s["ok_checks"]) == (2, 2, 2)
+    # One incident: the same person missing both items from 1 s to 2 s.
+    assert {t["label"]: t["count"] for t in s["by_type"]} == {"No Helmet": 1, "No Vest": 1}
+    [inc] = s["events"]
+    assert (inc["time_sec"], inc["end_sec"], inc["checks"]) == (1.0, 2.0, 2)
     snap = s["events"][0]["snapshot"]
     assert snap and client.get(f"/api/runs/{run_id}/snapshots/{snap}").status_code == 200
     full = s["events"][0]["frame_image"]
@@ -102,7 +106,7 @@ def test_full_run_lifecycle(client, tmp_path):
     assert client.get(f"/api/runs/{run_id}/preview").status_code == 200
 
     listing = client.get("/api/runs").json()
-    assert listing[0]["id"] == run_id and listing[0]["violation_checks"] == 3
+    assert listing[0]["id"] == run_id and listing[0]["violation_checks"] == 2 and listing[0]["incidents"] == 1
 
     assert client.delete(f"/api/runs/{run_id}").status_code == 204
     assert client.get(f"/api/runs/{run_id}").status_code == 404

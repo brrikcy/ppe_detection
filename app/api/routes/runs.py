@@ -151,9 +151,12 @@ def list_runs(store: Store) -> list[RunListItem]:
         item = RunListItem(id=meta.id, name=meta.name, created_at=meta.created_at,
                            status=meta.status, progress_fraction=_progress_fraction(meta))
         if meta.status == RunStatus.completed and (report := store.read_report(meta.id)):
+            tun = meta.options.tuning
             s = build_summary(report["timeline"], available_snapshots=set(), available_frames=set(),
-                              available_photos=set())
+                              available_photos=set(), vote_window=tun.vote_window,
+                              confirm_checks=tun.confirm_checks)
             item.violation_checks, item.worker_checks = s.violation_checks, s.worker_checks
+            item.incidents = len(s.events)
         items.append(item)
     return items
 
@@ -170,8 +173,9 @@ def get_run(run_id: str, store: Store, runner: Runner,
         timeline = report["timeline"] if report else None
     elif meta.status == RunStatus.running:
         timeline = runner.live_timeline(run_id)
+    tun = meta.options.tuning
     summary = (build_summary(timeline, _image_names(paths.snapshots), _image_names(paths.frames),
-                             _image_names(paths.people), meta.options.tuning.person_flag_ratio)
+                             _image_names(paths.people), tun.vote_window, tun.confirm_checks)
                if timeline is not None else None)
     return RunDetail(meta=meta, progress_fraction=_progress_fraction(meta), summary=summary)
 

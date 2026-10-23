@@ -148,7 +148,8 @@ function renderProgress(root, run) {
           h("dt", {}, "Frames written"), h("dd", {}, `${m.progress.frames_done.toLocaleString()} / ${m.progress.frames_total.toLocaleString()}`),
           h("dt", {}, "Frames checked"), h("dd", {}, `${m.progress.frames_analysed} / ~${totalChecks}`),
           h("dt", {}, "Workers seen (peak)"), h("dd", {}, s ? s.peak_workers : "–"),
-          h("dt", {}, "Checks with violations"), h("dd", {}, s ? `${s.violation_checks} / ${s.worker_checks}` : "–")),
+          h("dt", {}, "Violation incidents"), h("dd", {}, s ? String(s.events.length) : "–"),
+          h("dt", {}, "Failed checks"), h("dd", {}, s ? String(s.failed_checks ?? 0) : "–")),
         h("p", { class: "hint" }, "You can leave this page; the run keeps going and appears in the sidebar."))),
     s && s.timeline.length ? timelineCard(s, m, null) : null].filter(Boolean));
 }
@@ -182,8 +183,10 @@ function timelineCard(s, m, video) {
       h("div", { class: "legend" },
         h("span", {}, h("i", { style: "background:var(--good)" }), "PPE OK"),
         h("span", {}, h("i", { style: "background:var(--critical)" }), "PPE violation"),
-        s.timeline.some((p) => p.too_far)
-          ? h("span", {}, h("i", { style: "background:var(--muted)" }), "Too far to check") : null)),
+        s.timeline.some((p) => p.unverified)
+          ? h("span", {}, h("i", { style: "background:var(--warning)" }), "Item not visible") : null,
+        s.timeline.some((p) => p.too_far || p.unchecked)
+          ? h("span", {}, h("i", { style: "background:var(--muted)" }), "Not checked (too far, new or failed)") : null)),
     box);
   const chart = timelineChart(box, s.timeline, {
     duration: m.options.max_seconds ? Math.min(m.options.max_seconds, m.video.duration_sec) : m.video.duration_sec,
@@ -204,7 +207,7 @@ function byTypeCard(s) {
     ? h("div", { class: "hbars" }, s.by_type.map((t) => h("div", { class: "hbar" },
         h("div", { class: "row" }, h("span", {}, t.label), h("b", { class: "num" }, t.count)),
         h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(t.count / max) * 100}%` })))))
-    : h("div", { class: "empty-note" }, h("span", { html: icons.check }), "No violations found in any checked frame.");
+    : h("div", { class: "empty-note" }, h("span", { html: icons.check }), "No violations: nobody's status showed missing PPE.");
 
   // Share of worker checks where an item couldn't be seen; above half, its results say little.
   const share = (t) => t.count / Math.max(1, s.worker_checks);
@@ -212,7 +215,7 @@ function byTypeCard(s) {
   const unv = s.unverified.length || s.too_small_checks
     ? [h("div", { class: "divider" }),
        h("h3", {}, "Couldn't verify"),
-       h("p", { class: "hint", style: "margin:4px 0 12px" }, "Item not visible (worker cut off or blocked). Not counted as violations."),
+       h("p", { class: "hint", style: "margin:4px 0 12px" }, "Item not visible (worker cut off or blocked). Not counted as violations, and not as compliant either."),
        low.length ? h("p", { class: "hint warn-note", style: "margin:0 0 12px" },
          `Low coverage: ${low.join(", ")} could only be checked in a minority of checks, so a clean result for ${low.length > 1 ? "them" : "it"} means little.`) : null,
        h("div", { class: "hbars" }, s.unverified.map((t) => h("div", { class: "hbar is-warn" },
@@ -226,7 +229,7 @@ function byTypeCard(s) {
 
   return h("section", { class: "card card-pad" },
     h("div", { class: "card-head" },
-      h("div", {}, h("h2", {}, "Violations by type"), h("p", {}, "Counted per worker per checked frame."))),
+      h("div", {}, h("h2", {}, "Violations by type"), h("p", {}, "Counted per incident: one person missing the item over consecutive checks."))),
     body, ...unv);
 }
 
@@ -254,7 +257,8 @@ function eventsCard(run, s, video) {
         ? h("img", { src: api.urls.snapshot(run.meta.id, e.snapshot), alt: `Worker at ${fmt.timePrecise(e.time_sec)}`, loading: "lazy" })
         : h("span", { class: "hint" }, "No snapshot")),
       h("div", { class: "body" },
-        h("span", { class: "time" }, e.track_id != null ? `#${e.track_id} · ${fmt.timePrecise(e.time_sec)}` : fmt.timePrecise(e.time_sec)),
+        h("span", { class: "time" }, [e.track_id != null ? `#${e.track_id}` : null, incidentTime(e),
+          e.checks > 1 ? plural(e.checks, "check") : null].filter(Boolean).join(" · ")),
         h("div", { class: "tags" }, e.violations.map((v) => h("span", { class: "tag-bad" }, v)))))));
     more.replaceChildren(list.length > shown
       ? h("button", { class: "btn", type: "button", onclick: () => { shown += EVENTS_PAGE; draw(); } }, `Show more (${list.length - shown} left)`)
@@ -264,14 +268,19 @@ function eventsCard(run, s, video) {
   if (!s.events.length) {
     return h("section", { class: "card card-pad" },
       h("div", { class: "card-head" }, h("h2", {}, "Violations")),
-      h("div", { class: "empty-note" }, h("span", { html: icons.check }), "Every worker in every checked frame had the required PPE."));
+      h("div", { class: "empty-note" }, h("span", { html: icons.check }), "No worker's status showed missing PPE at any point."));
   }
   draw();
   return h("section", { class: "card card-pad" },
     h("div", { class: "card-head" },
-      h("div", {}, h("h2", {}, "Violations"), h("p", {}, "One card per flagged worker per checked frame. Click to open; use ← → to browse.")),
+      h("div", {}, h("h2", {}, "Violations"), h("p", {}, "One card per incident: a person whose status showed missing PPE, from the first to the last check in a row. Click to open; use ← → to browse.")),
       filters),
     grid, more);
+}
+
+function incidentTime(e) {
+  return e.end_sec != null && e.end_sec > e.time_sec
+    ? `${fmt.timePrecise(e.time_sec)}–${fmt.timePrecise(e.end_sec)}` : fmt.timePrecise(e.time_sec);
 }
 
 function seekTo(video, t) {
@@ -297,9 +306,11 @@ function peopleCard(run, s, video) {
   let filter = "all";
   const grid = h("div", { class: "people" });
   const filters = h("div", { class: "filters", role: "group", "aria-label": "Filter people" });
-  // flagged: missing an item in most of their checks; some: flagged in a minority of checks; ok: never.
-  const state = (p) => (!p.ok ? "bad" : p.violation_checks ? "some" : "ok");
+  const state = (p) => p.state ?? (p.ok ? "ok" : "flagged"); // older servers sent only ok
   const count = (k) => s.people.filter((p) => state(p) === k).length;
+  const LABELS = [["flagged", "Flagged"], ["unverified", "Not verified"], ["brief", "Seen briefly"], ["ok", "PPE OK"]];
+  const statusClass = { flagged: "bad", unverified: "unverified", brief: "brief", ok: "ok" };
+  const cardClass = { flagged: "bad", unverified: "unverified", brief: "brief", ok: "ok" };
 
   function open(p) {
     const events = s.events.filter((e) => e.track_id === p.id);
@@ -311,40 +322,44 @@ function peopleCard(run, s, video) {
   }
 
   function draw() {
-    filters.replaceChildren(...[["all", `All (${s.people.length})`], ["bad", `Flagged (${count("bad")})`],
-      ["some", `Occasional (${count("some")})`], ["ok", `Always OK (${count("ok")})`]]
+    filters.replaceChildren(...[["all", `All (${s.people.length})`],
+      ...LABELS.filter(([k]) => count(k)).map(([k, label]) => [k, `${label} (${count(k)})`])]
       .map(([k, label]) => h("button", { type: "button", "aria-pressed": String(filter === k),
         onclick: () => { filter = k; draw(); } }, label)));
-    const order = { bad: 0, some: 1, ok: 2 };
+    const order = { flagged: 0, unverified: 1, brief: 2, ok: 3 };
     const list = s.people.filter((p) => filter === "all" || state(p) === filter)
       .sort((a, b) => order[state(a)] - order[state(b)] || a.id - b.id);
     grid.replaceChildren(...list.map((p) => {
+      const st = state(p);
       const items = p.missing.map((t) => h("div", { class: "pm-row" },
         h("span", {}, t.label),
         h("span", { class: "num" }, `${t.count} of ${p.checks}`),
-        h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(t.count / p.checks) * 100}%` }))));
-      const st = state(p);
-      return h("button", { class: `person is-${st}`, type: "button",
+        h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(t.count / Math.max(1, p.checks)) * 100}%` }))));
+      const detail = {
+        flagged: p.incidents ? `${plural(p.incidents, "incident")} · ${fmt.time(p.violation_sec ?? 0)} in violation` : null,
+        unverified: `An item couldn't be seen in ${p.unverified_checks} of ${plural(p.checks, "check")}`,
+        brief: `Not checked often enough for a verdict (${plural(p.checks, "check")})`,
+        ok: p.violation_checks ? `${plural(p.violation_checks, "single-check misread")} ignored by the vote` : null,
+      }[st];
+      return h("button", { class: `person is-${cardClass[st]}`, type: "button",
         title: `Open images of person #${p.id}`, onclick: () => open(p) },
         h("div", { class: "photo" },
           p.photo ? h("img", { src: api.urls.person(run.meta.id, p.photo), alt: `Person ${p.id}`, loading: "lazy" }) : null,
           h("span", { class: "pid" }, `#${p.id}`)),
         h("div", { class: "body" },
-          h("span", { class: `status ${st}` }, p.ok ? "PPE OK" : p.status_label),
-          st === "some" ? h("span", { class: "occasional" },
-            `Occasional violations: ${p.violation_checks} of ${plural(p.checks, "check")}`) : null,
+          h("span", { class: `status ${statusClass[st]}` }, p.status_label),
+          detail ? h("span", { class: "occasional" }, detail) : null,
           h("span", { class: "meta num" },
-            `On screen ${fmt.time(p.first_seen_sec)}–${fmt.time(p.last_seen_sec)} · ${plural(p.checks, "check")}`),
-          items.length ? h("div", { class: "pm" }, items) : h("span", { class: "meta" }, "All PPE in every check"),
-          p.latest_label !== (p.ok ? "PPE OK" : p.status_label)
-            ? h("span", { class: "meta" }, `Last check: ${p.latest_label}`) : null));
+            `On screen ${fmt.time(p.first_seen_sec)}–${fmt.time(p.last_seen_sec)} · ${plural(p.checks, "check")}` +
+            (p.failed_checks ? ` · ${p.failed_checks} failed` : "")),
+          items.length ? h("div", { class: "pm" }, items) : h("span", { class: "meta" }, "No missing item in any check")));
     }));
   }
   draw();
   return h("section", { class: "card card-pad" },
     h("div", { class: "card-head" },
       h("div", {}, h("h2", {}, "People"),
-        h("p", {}, "Each worker keeps one ID through the video. A person is flagged for an item when it was missing in more than half of their checks; fewer than that shows as occasional.")),
+        h("p", {}, `Each worker keeps one ID through the video. A person is flagged when their status showed an item missing, i.e. it was missing in at least ${run.meta.options.tuning?.confirm_checks ?? 2} of their recent checks, the same rule as the boxes in the video. Bars show single checks.`)),
       filters),
     grid);
 }
@@ -371,6 +386,12 @@ function renderDashboard(root, run, { onDeleted }) {
 
   const compliance = s.compliance_rate;
   const timeShare = s.frames_analysed ? s.frames_with_violation / s.frames_analysed : null;
+  const judged = s.ok_checks + s.violation_checks;
+  const attempted = s.worker_checks + (s.failed_checks ?? 0);
+  const failedShare = attempted ? (s.failed_checks ?? 0) / attempted : 0;
+  const notJudged = [s.unverified_checks ? `${s.unverified_checks} not verified` : null,
+    s.pending_checks ? `${s.pending_checks} first checks` : null].filter(Boolean).join(", ");
+  const flagged = s.people.filter((p) => (p.state ?? (p.ok ? "ok" : "flagged")) === "flagged").length;
 
   root.replaceChildren(h("div", { class: "page" },
     header(run, [
@@ -380,17 +401,21 @@ function renderDashboard(root, run, { onDeleted }) {
     ]),
     h("div", { class: "kpis" },
       kpi("Compliance", compliance == null ? "–" : h("span", {}, (compliance * 100).toFixed(0), h("small", {}, "%")),
-        `${s.ok_checks} of ${s.worker_checks} worker checks had all PPE`,
+        `${s.ok_checks} of ${judged} judged worker checks had all PPE` + (notJudged ? ` (${notJudged} left out)` : ""),
         compliance == null ? null : compliance >= 0.95 ? "good" : "bad"),
-      kpi("Violations", String(s.violation_checks),
-        s.violation_checks ? `across ${plural(s.frames_with_violation, "checked frame")}` : "none found", s.violation_checks ? "bad" : "good"),
+      kpi("Violations", String(s.events.length),
+        s.events.length ? `${plural(s.events.length, "incident")} over ${plural(s.violation_checks, "worker check")}` : "none found",
+        s.events.length ? "bad" : "good"),
       kpi("Time with a violation", timeShare == null ? "–" : h("span", {}, (timeShare * 100).toFixed(0), h("small", {}, "%")),
         `${s.frames_with_violation} of ${s.frames_analysed} checked frames`),
       s.tracked
         ? kpi("People tracked", String(s.people.length),
-            `${s.people.filter((p) => !p.ok).length} flagged · peak ${s.peak_workers} on screen at once`,
-            s.people.some((p) => !p.ok) ? "bad" : "good")
+            `${flagged} flagged · peak ${s.peak_workers} on screen at once`, flagged ? "bad" : "good")
         : kpi("Workers on screen", String(s.peak_workers), `peak · ${s.avg_workers} on average`)),
+    s.failed_checks ? h("div", { class: `warn-banner`, role: failedShare > 0.1 ? "alert" : null },
+      h("b", {}, `${plural(s.failed_checks, "worker check")} failed`),
+      ` (${Math.round(failedShare * 100)}% of checks). Moondream didn't answer, so ${s.failed_checks === 1 ? "that check says" : "those checks say"} nothing about the worker. ` +
+      (failedShare > 0.1 ? "Results for this run are incomplete; check the server log and consider running it again." : "")) : null,
     h("div", { class: "grid-main" },
       h("section", { class: "card player" }, video,
         playerMsg,

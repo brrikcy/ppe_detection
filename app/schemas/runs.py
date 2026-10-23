@@ -70,17 +70,23 @@ class TypeCount(BaseModel):
 
 
 class TimelinePoint(BaseModel):
-    """One regular check. workers = on screen; ok = workers - violations - too_far."""
+    """One regular check. workers = on screen; ok = workers - violations - unverified - too_far - unchecked."""
 
     time_sec: float
     workers: int
-    violations: int
+    violations: int  # status shows a missing item (the same vote as the video)
     too_far: int = 0  # on screen but too small to check
+    unverified: int = 0  # an item couldn't be seen
+    unchecked: int = 0  # too new to check, not enough checks for a verdict yet, or the check failed
 
 
 class ViolationEvent(BaseModel):
-    time_sec: float
-    frame: int
+    """A violation incident: consecutive checks of one person whose status showed a missing item."""
+
+    time_sec: float  # start
+    end_sec: float | None = None  # last check in the incident (None: a single check, older runs)
+    checks: int = 1
+    frame: int  # the check whose photo is shown
     violations: list[str]
     box: list[int]
     track_id: int | None = None  # person id; None for runs made before tracking existed
@@ -94,12 +100,17 @@ class PersonSummary(BaseModel):
     id: int
     first_seen_sec: float
     last_seen_sec: float
-    checks: int  # checked frames this person was detected in
-    violation_checks: int  # of those, how many had any violation
-    ok: bool  # overall status (majority rule per item, see summary.build_people)
-    status_label: str  # "PPE OK" or "PPE Violation (n) - No X, No Y"
-    missing: list[TypeCount]  # per violation label: checks it was flagged in
-    latest_label: str  # status at their last check
+    checks: int  # checks with an answer from Moondream (failed ones not included)
+    violation_checks: int  # of those, how many had any missing item (single checks, before voting)
+    unverified_checks: int = 0  # of those, how many had an item that couldn't be seen
+    failed_checks: int = 0
+    incidents: int = 0  # violation incidents (see ViolationEvent)
+    violation_sec: float = 0.0  # time from the first to the last check of each incident, summed
+    state: str = "ok"  # flagged, unverified (not verified), brief (seen briefly) or ok
+    ok: bool  # state == "ok"
+    status_label: str  # "PPE OK", "PPE Violation (n) - No X, No Y", "Not verified" or "Seen briefly"
+    missing: list[TypeCount]  # per violation label: single checks it was missing in
+    latest_label: str  # status after their last check
     photo: str | None  # file name under /people/
 
 
@@ -108,16 +119,19 @@ class RunSummary(BaseModel):
     arrival_checks: int = 0  # extra checks of workers who appeared between regular checks
     peak_workers: int
     avg_workers: float
-    worker_checks: int  # sum over checked frames of workers checked (too-far-away ones excluded)
-    ok_checks: int
-    violation_checks: int
-    compliance_rate: float | None  # ok_checks / worker_checks
+    worker_checks: int  # worker checks Moondream answered (too far, new and failed ones excluded)
+    ok_checks: int  # status PPE OK after the check
+    violation_checks: int  # status showed a missing item after the check
+    unverified_checks: int = 0  # status OK but an item couldn't be seen
+    pending_checks: int = 0  # not enough checks of that worker yet for a verdict
+    failed_checks: int = 0  # every Moondream call of the check failed
+    compliance_rate: float | None  # ok_checks / (ok_checks + violation_checks)
     frames_with_violation: int
     by_type: list[TypeCount]
     unverified: list[TypeCount]
     too_small_checks: int = 0  # worker sightings too far away to check
     timeline: list[TimelinePoint]
-    events: list[ViolationEvent]
+    events: list[ViolationEvent]  # violation incidents
     tracked: bool = False  # run has person ids
     people: list[PersonSummary] = Field(default_factory=list)
 
@@ -130,6 +144,7 @@ class RunListItem(BaseModel):
     progress_fraction: float
     violation_checks: int | None = None
     worker_checks: int | None = None
+    incidents: int | None = None
 
 
 class RunDetail(BaseModel):
@@ -165,3 +180,6 @@ class TryRequestResult(BaseModel):
     status: str  # present / missing / unverified
     steps: list[dict]
     image_size: list[int]
+    image: str  # the image Moondream was shown (data: URI); detect boxes are relative to it
+    mode: str  # "run" (worker as in the run: crop, padding, neighbours) or "image" (the image alone)
+    note: str

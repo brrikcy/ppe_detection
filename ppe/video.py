@@ -18,6 +18,14 @@ from .status import PersonStatus
 
 log = logging.getLogger(__name__)
 
+EDGE_PX = 2  # a box this close to the frame edge is (probably) cut off
+ARRIVAL_CUTOFF_SEC = 0.5  # no arrival check when the next regular check is this close
+
+
+def _at_edge(box, width: int, height: int) -> bool:
+    x1, y1, x2, y2 = box
+    return x1 <= EDGE_PX or y1 <= EDGE_PX or x2 >= width - EDGE_PX or y2 >= height - EDGE_PX
+
 
 def process_video(
     input_path: str | Path,
@@ -25,18 +33,22 @@ def process_video(
     analyzer: PPEAnalyzer,
     max_seconds: float | None = None,
     on_progress: Callable[[int, int], None] | None = None,
-    on_analysed: Callable[[dict, "cv2.typing.MatLike", list[WorkerResult]], None] | None = None,
+    on_analysed: Callable[..., None] | None = None,
     people_factory: Callable[[float], object] | None = None,
 ) -> dict:
     """Annotate `input_path` into `output_path` and return the report dict.
 
-    Every frame, the person tracker made by `people_factory(fps)` (default: YOLO11n +
-    BoT-SORT, see ppe.people) gives the tracked workers. Every analysis interval, each worker big enough to judge gets a PPE check;
-    a worker who appears between checks is checked straight away. The video shows each
-    worker's status voted over their recent checks (ppe.status).
+    Every frame, the person tracker made by `people_factory(fps)` (default: YOLO11s +
+    BoT-SORT, see ppe.people) gives the tracked workers. Every analysis interval, each
+    worker big enough to judge and tracked for at least `min_check_age_sec` gets a PPE
+    check; a worker who appears between checks is checked as soon as they qualify (and
+    are fully in frame), unless the next regular check is close. The video shows each
+    worker's status voted over their recent checks (ppe.status); the same voted status
+    is stored with every check in the report.
 
     on_progress(frames_done, total_frames) is called periodically while frames are written.
-    on_analysed(timeline_entry, frame_bgr, results) is called after each check frame.
+    on_analysed(timeline_entry, frame_bgr, results, display) is called after each check frame,
+    with the raw check results and the voted boxes drawn in the video.
     """
     input_path, output_path = Path(input_path), Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,7 +66,9 @@ def process_video(
     cfg = analyzer.config
     tun = cfg.tuning
     step = max(1, int(round(cfg.analysis_interval_sec * fps)))
-    min_check_h = tun.min_check_height_frac * height
+    arrival_cutoff = min(step // 2, max(1, int(round(ARRIVAL_CUTOFF_SEC * fps))))
+    min_check_h = tun.min_check_height(height)
+    min_age = int(round(tun.min_check_age_sec * fps))
     log.info("%s: %dx%d @ %.1ffps, %d frames, checking every %d frames",
              input_path.name, width, height, fps, total, step)
 
@@ -64,15 +78,22 @@ def process_video(
         model = MODELS_DIR / tun.person_model if tun.person_model else Path(cfg.person_model or DEFAULT_MODEL)
         people = YoloPersonTracker(fps=fps, model_path=model, imgsz=tun.detector_imgsz,
                                    conf=tun.detector_conf, hidden_sec=tun.hidden_sec,
-                                   min_age_sec=tun.min_track_age_sec,
+                                   min_age_sec=tun.min_track_age_sec, coast_sec=tun.coast_sec,
+                                   with_reid=tun.with_reid, fixed_camera=tun.fixed_camera,
                                    tracker_overrides={"new_track_thresh": tun.new_track_thresh})
     else:
         people = people_factory(fps)
     writer = FrameWriter(output_path, width, height, fps, audio_source=input_path, max_seconds=max_seconds)
 
+    def new_status() -> PersonStatus:
+        return PersonStatus(window=tun.vote_window, confirm=tun.confirm_checks)
+
     statuses: dict[int, PersonStatus] = {}
+    first_seen: dict[int, int] = {}  # track id -> first frame on screen
+    attempted: set[int] = set()  # tracks that had a check (even a failed one)
     timeline = []
-    tried = failures = 0
+    worker_checks = failed_checks = failed_in_a_row = 0
+    last_error = None
     idx = 0
     try:
         while True:
@@ -82,43 +103,63 @@ def process_video(
             if not ok:
                 break
             tracked = people.update(frame)
-            for p in tracked:
-                statuses.setdefault(p.id, PersonStatus(window=tun.vote_window))
-            checkable = [p for p in tracked if p.box[3] - p.box[1] >= min_check_h]
+            live = [p for p in tracked if not getattr(p, "coasting", False)]
+            for p in live:
+                statuses.setdefault(p.id, new_status())
+                first_seen.setdefault(p.id, idx)
+
+            def old_enough(p) -> bool:
+                # People on screen from the start are established, not flicker.
+                return first_seen[p.id] == 0 or idx - first_seen[p.id] >= min_age
+
+            big = {p.id for p in live if p.box[3] - p.box[1] >= min_check_h}
+            checkable = [p for p in live if p.id in big and old_enough(p)]
             is_check = idx % step == 0
             if is_check:
                 due = checkable
-            elif step - idx % step > step // 2:
+            elif step - idx % step > arrival_cutoff:
                 # Someone new is checked now rather than at the next check frame, unless that's close.
-                due = [p for p in checkable if not statuses[p.id].checks]
+                # A failed attempt waits for the next check frame instead of retrying every frame.
+                due = [p for p in checkable if p.id not in attempted
+                       and not (tun.skip_edge_arrivals and _at_edge(p.box, width, height))]
             else:
                 due = []
 
             results: dict[int, WorkerResult] = {}
-            failed = False
             if due:
-                tried += 1
                 rgb = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 try:
-                    checked = analyzer.check_workers(rgb, [p.box for p in due], [p.box for p in tracked])
+                    checked = analyzer.check_workers(rgb, [p.box for p in due], [p.box for p in live])
                 except (AuthError, ModelError):
                     raise  # every later check would fail the same way
-                except Exception:
-                    failures += 1
-                    failed = True
-                    log.exception("PPE check failed at frame %d; skipping it", idx)
+                for p, r in zip(due, checked):
+                    r.track_id = p.id
+                    results[p.id] = r
+                    attempted.add(p.id)
+                    worker_checks += 1
+                    if r.check_failed:
+                        failed_checks += 1
+                        last_error = r.error
+                        continue
+                    statuses[p.id].add(r, idx)
+                if all(r.check_failed for r in results.values()):
+                    failed_in_a_row += 1
+                    log.warning("PPE check failed at frame %d (%s)", idx, last_error)
+                    if failed_in_a_row >= tun.max_failed_checks:
+                        raise RuntimeError(f"Moondream failed on {failed_in_a_row} checks in a row, so the run "
+                                           f"was stopped. Last error: {last_error}")
                 else:
-                    for p, r in zip(due, checked):
-                        r.track_id = p.id
-                        results[p.id] = r
-                        statuses[p.id].add(r, idx)
+                    failed_in_a_row = 0
 
+            display = [statuses[p.id].display(p.id, p.box, too_small=p.box[3] - p.box[1] < min_check_h)
+                       for p in tracked if p.id in statuses]
             arrival = bool(due) and not is_check
-            if (is_check or arrival) and not failed:
+            if is_check or arrival:
                 if is_check:
-                    # Regular check: everyone on screen, with too-far workers marked as such.
-                    current = [results.get(p.id) or WorkerResult(box=p.box, track_id=p.id, too_small=True)
-                               for p in tracked]
+                    # Regular check: everyone on screen. Too-far and too-new workers are marked as such.
+                    current = [results.get(p.id) or WorkerResult(box=p.box, track_id=p.id, too_small=p.id not in big,
+                                                                 pending=p.id in big)
+                               for p in live]
                 else:
                     # Arrival check: only the newcomers, so they're in the report even if they
                     # leave before the next regular check.
@@ -127,25 +168,20 @@ def process_video(
                     "frame": idx,
                     "time_sec": round(idx / fps, 2),
                     "arrival": arrival,
-                    "workers": [{"track_id": r.track_id, "box": list(r.box), "label": r.label,
-                                 "violations": r.violations, "unverified": r.unverified,
-                                 "too_small": r.too_small}
-                                for r in current],
+                    "workers": [_worker_entry(r, statuses.get(r.track_id)) for r in current],
                 }
                 timeline.append(entry)
                 if on_analysed:
-                    on_analysed(entry, frame, current)
+                    on_analysed(entry, frame, current, display)
                 log.info("frame %d (%.1fs)%s: %d workers, %d with violations", idx, idx / fps,
                          " arrival" if arrival else "", len(current), sum(bool(r.violations) for r in current))
 
-            display = [statuses[p.id].display(p.id, p.box, too_small=p.box[3] - p.box[1] < min_check_h)
-                       for p in tracked]
             writer.write(draw_results(frame, display))
             idx += 1
             if on_progress and (idx % 10 == 0 or idx == total):
                 on_progress(idx, total)
-        if tried and failures == tried:
-            raise RuntimeError("Moondream analysis failed on every check; see the server log")
+        if worker_checks and failed_checks == worker_checks:
+            raise RuntimeError(f"Moondream analysis failed on every check. Last error: {last_error}")
         writer.close()
     except BaseException:
         writer.abort()
@@ -164,6 +200,8 @@ def process_video(
         "frames_written": idx,
         "frames_analysed": sum(not e["arrival"] for e in timeline),  # regular checks
         "arrival_checks": sum(e["arrival"] for e in timeline),
+        "worker_checks": worker_checks,
+        "failed_checks": failed_checks,
         "required_ppe": cfg.required_ppe,
         "moondream_endpoint": cfg.moondream_endpoint,
         "tuning": tun.model_dump(),
@@ -173,3 +211,14 @@ def process_video(
     report_path.write_text(json.dumps(report, indent=2))
     log.info("Wrote %s and %s", output_path, report_path)
     return report
+
+
+def _worker_entry(r: WorkerResult, status: PersonStatus | None) -> dict:
+    """One worker in a timeline entry: the raw check, and their voted status after it."""
+    entry = {"track_id": r.track_id, "box": list(r.box), "label": r.label,
+             "violations": r.violations, "unverified": r.unverified, "too_small": r.too_small,
+             "pending": r.pending, "failed": r.failed, "check_failed": r.check_failed}
+    if status is not None:
+        entry.update(confirmed=status.confirmed, shown=list(status.shown),
+                     shown_unverified=list(status.unverified))
+    return entry

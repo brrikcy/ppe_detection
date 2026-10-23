@@ -38,7 +38,7 @@ async function refreshSidebar() {
     let meta;
     if (active) meta = h("div", { class: "mini-bar" }, h("i", { style: `width:${Math.round(r.progress_fraction * 100)}%` }));
     else if (r.status === "completed") meta = h("span", { class: "meta num" },
-      `${r.violation_checks ? plural(r.violation_checks, "violation") : "No violations"} · ${plural(r.worker_checks, "check")}`);
+      `${r.incidents ? plural(r.incidents, "violation") : "No violations"} · ${plural(r.worker_checks, "check")}`);
     else meta = h("span", { class: "meta" }, "Did not finish");
     return h("a", {
       class: "run-item", href: `#run/${encodeURIComponent(r.id)}`,

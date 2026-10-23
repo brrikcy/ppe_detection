@@ -19,7 +19,7 @@ class Settings:
     data_dir: Path
     server_api_key: str | None  # fallback when the form leaves the key empty
     max_upload_mb: int = 1024
-    person_model: Path | None = None  # YOLO weights for person tracking; None = models/yolo11n.pt
+    person_model: Path | None = None  # YOLO weights for person tracking; None = models/yolo11s.pt
     moondream_endpoint: str = DEFAULT_ENDPOINT  # where Moondream requests (and the API key) are sent
 
     @classmethod

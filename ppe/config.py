@@ -51,7 +51,7 @@ class Config:
     api_key: str
     required_ppe: list[str] = field(default_factory=lambda: ["helmet", "vest"])
     analysis_interval_sec: float = 1.0
-    person_model: str | None = None  # server default YOLO weights; None = models/yolo11n.pt
+    person_model: str | None = None  # server default YOLO weights; None = models/yolo11s.pt
     tuning: Tuning = field(default_factory=Tuning)  # prompts, decision rules, model, tracker settings
     moondream_endpoint: str = DEFAULT_ENDPOINT  # Moondream API base URL (MOONDREAM_ENDPOINT)
 

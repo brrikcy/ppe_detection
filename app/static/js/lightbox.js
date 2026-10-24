@@ -10,7 +10,10 @@ const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 let mode = "frame"; // remembered between openings
 
 /**
- * @param {{time_sec:number, violations:string[], notes?:string[], cropUrl:string|null, frameUrl:string|null}[]} items
+ * box and frameSize (optional): the worker's box in video pixels and the video's [width, height];
+ * when given, the full frame dims everything but that worker, so the one violation stands out.
+ * @param {{time_sec:number, violations:string[], notes?:string[], cropUrl:string|null, frameUrl:string|null,
+ *          box?:number[], frameSize?:number[]}[]} items
  * @param {number} start
  * @param {{onShowInVideo?: (item) => void}} opts
  */
@@ -20,6 +23,10 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
 
   const img = h("img", { class: "lb-img", alt: "" });
   const empty = h("div", { class: "lb-empty", hidden: true }, "No image saved for this view.");
+  const holeLabel = h("span");
+  const hole = h("div", { class: "lb-hole" }, holeLabel);
+  const spot = h("div", { class: "lb-spot", hidden: true, "aria-hidden": "true" }, hole);
+  let shownMode = mode;
   const counter = h("span", { class: "lb-counter num" });
   const person = h("span", { class: "lb-person" });
   const time = h("span", { class: "lb-time num" });
@@ -41,7 +48,7 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
       h("div", { class: "lb-title" }, person, counter, time, tags),
       closeBtn),
     h("div", { class: "lb-stage", onclick: (e) => { if (e.target.classList.contains("lb-stage")) close(); } },
-      prev, img, empty, next),
+      prev, img, spot, empty, next),
     h("div", { class: "lb-bottom" },
       h("div", { class: "seg lb-seg", role: "group", "aria-label": "Image" }, modeBtns.frame, modeBtns.crop),
       h("div", { class: "lb-actions" }, openLink, videoBtn),
@@ -56,6 +63,7 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
     // Fall back to whichever image exists (older runs have no full frames).
     const m = urlFor(it, mode) ? mode : (mode === "frame" ? "crop" : "frame");
     const url = urlFor(it, m);
+    shownMode = m;
     counter.textContent = `${index + 1} / ${items.length}`;
     person.textContent = it.track_id != null ? `Person #${it.track_id}` : "";
     person.hidden = it.track_id == null;
@@ -80,6 +88,7 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
       openLink.hidden = true;
     }
     img.classList.toggle("is-crop", m === "crop");
+    placeSpot();
     prev.disabled = index === 0;
     next.disabled = index === items.length - 1;
     // Warm the cache for neighbours so browsing feels instant.
@@ -88,6 +97,26 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
       if (u) new Image().src = u;
     }
   }
+
+  // Lays the spotlight over the image as drawn (it scales with the window), around the worker's box.
+  function placeSpot() {
+    const it = items[index];
+    const show = shownMode === "frame" && !img.hidden && it.box && it.frameSize && img.complete && img.naturalWidth > 0;
+    spot.hidden = !show;
+    if (!show) return;
+    Object.assign(spot.style, { left: `${img.offsetLeft}px`, top: `${img.offsetTop}px`,
+      width: `${img.offsetWidth}px`, height: `${img.offsetHeight}px` });
+    const [fw, fh] = it.frameSize;
+    const [x1, y1, x2, y2] = it.box;
+    const pad = 0.012; // a little room so the drawn box and its tag stay inside the light
+    const left = Math.max(0, x1 / fw - pad), top = Math.max(0, y1 / fh - pad);
+    Object.assign(hole.style, { left: `${left * 100}%`, top: `${top * 100}%`,
+      width: `${(Math.min(1, x2 / fw + pad) - left) * 100}%`, height: `${(Math.min(1, y2 / fh + pad) - top) * 100}%` });
+    hole.classList.toggle("label-below", top < 0.08);
+    holeLabel.textContent = [it.track_id != null ? `#${it.track_id}` : null, ...it.violations].filter(Boolean).join(" · ");
+  }
+  img.addEventListener("load", placeSpot);
+  window.addEventListener("resize", placeSpot);
 
   function setMode(m) {
     mode = m;
@@ -116,6 +145,7 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
 
   function close() {
     document.removeEventListener("keydown", onKey);
+    window.removeEventListener("resize", placeSpot);
     document.body.classList.remove("lb-open-body");
     root.remove();
     opener?.focus?.();

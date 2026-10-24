@@ -1,11 +1,9 @@
-// Run view: live progress while processing, results dashboard when done.
+// Run view: one results page that fills in while the run is processing and settles when it's done.
 
 import { api, apiKey, ServerUnreachable } from "../api.js";
 import { timelineChart } from "../charts.js";
-import { openLightbox } from "../lightbox.js";
-import { openProfile } from "../profile.js";
 import { fmt, h, icons, plural, statusPill } from "../ui.js";
-import { detectionsCard, eventItems, incidentTime, seekTo } from "./detections.js";
+import { createDetections } from "./detections.js";
 
 const POLL_MS = 1000;
 
@@ -35,11 +33,9 @@ export async function renderRun(root, runId, { onChanged, onDeleted }) {
     }
     if (disposed) return;
     const status = run.meta.status;
-    if (status === "queued" || status === "running") {
-      renderProgress(root, run);
-      timer = setTimeout(tick, POLL_MS);
-    } else if (status === "completed") {
-      renderDashboard(root, run, { onDeleted });
+    if (status === "queued" || status === "running" || status === "completed") {
+      renderResults(root, run, { onDeleted });
+      if (status !== "completed") timer = setTimeout(tick, POLL_MS);
     } else {
       renderFailed(root, run, { onDeleted });
     }
@@ -105,6 +101,7 @@ function rerunButton(run) {
     wrap.append(panel);
     btn.setAttribute("aria-expanded", "true");
     document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onOutside, true);
     panel.querySelector("input[type=radio]:checked").focus();
 
     async function go() {
@@ -125,11 +122,14 @@ function rerunButton(run) {
     }
   }
   function onKey(e) { if (e.key === "Escape") closePanel(); }
+  // A click anywhere but the panel and its button closes it (the button toggles it itself).
+  function onOutside(e) { if (!wrap.contains(e.target)) closePanel(); }
   function closePanel() {
     panel?.remove();
     panel = null;
     btn.setAttribute("aria-expanded", "false");
     document.removeEventListener("keydown", onKey);
+    document.removeEventListener("pointerdown", onOutside, true);
   }
   wrap.append(btn);
   return wrap;
@@ -177,15 +177,27 @@ function notFound(message) {
     h("a", { class: "btn btn-primary", href: "#new" }, "New inspection")));
 }
 
-// ---------------------------------------------------------------- progress
+// ---------------------------------------------------------------- failed
 
-// While a run is processing, the page is built once and then updated in place every poll:
-// numbers change, new violations and people slide in, and the preview swaps only once the
-// next frame has loaded, so nothing flickers or jumps.
-function renderProgress(root, run) {
-  let page = root.querySelector("[data-view=progress]");
+function renderFailed(root, run, { onDeleted }) {
+  root.replaceChildren(h("div", { class: "page" },
+    header(run, [rerunButton(run), deleteButton(run, onDeleted)]),
+    h("div", { class: "alert", role: "alert" },
+      h("h3", {}, "This run failed"),
+      h("p", {}, run.meta.error || "Unknown error.")),
+    h("div", {}, h("a", { class: "btn btn-primary", href: "#new" }, "Start a new inspection"))));
+}
+
+// ---------------------------------------------------------------- results
+
+// One page from the first poll to the end: while the run is processing it shows the live
+// video with progress under it, and every figure, the violations list and the chart fill in
+// as checks come in. When the run completes, the live view is replaced by the annotated
+// video and the progress line by its summary; nothing else moves.
+function renderResults(root, run, { onDeleted }) {
+  let page = root.querySelector("[data-view=results]");
   if (!page || page.dataset.run !== run.meta.id) {
-    page = buildLive(run);
+    page = buildResults(run, { onDeleted });
     root.replaceChildren(page);
   }
   page.update(run);
@@ -198,253 +210,54 @@ function swapImage(img, url) {
   next.src = url;
 }
 
-function bump(el, text) {
-  if (el.textContent === text) return;
-  el.textContent = text;
+function bump(el) {
   el.classList.remove("bump");
   void el.offsetWidth; // restart the animation
   el.classList.add("bump");
 }
 
-function buildLive(run) {
-  const m = run.meta;
-  const id = m.id;
-  const duration = m.options.max_seconds ? Math.min(m.options.max_seconds, m.video.duration_sec) : m.video.duration_sec;
-  const page = h("div", { class: "page", "data-view": "progress", "data-run": id });
-  const headSlot = h("div");
-
-  // Preview with a live badge
-  const previewImg = h("img", { alt: "Latest checked frame with detections" });
-  const waiting = h("div", { class: "wait" });
-  const clock = h("span", { class: "num" });
-  const badge = h("span", { class: "live-badge" }, h("i"), h("span", { class: "live-text" }, "Live"), clock);
-  const preview = h("div", { class: "preview live-preview" }, previewImg, waiting, badge);
-
-  // Progress and counters
-  const stage = h("span", { class: "eyebrow" });
-  const pct = h("div", { class: "big-pct num" });
-  const bar = h("i");
-  const eta = h("p", { class: "hint live-eta" });
-  const activity = h("p", { class: "live-activity" });
-  const counter = (label) => {
-    const value = h("b", { class: "num" }, "0");
-    const note = h("span");
-    return { value, note, el: h("div", { class: "live-stat" }, h("span", { class: "eyebrow" }, label), value, note) };
+// A KPI tile whose label, value and note change in place; the value pulses when it changes.
+function kpiTile() {
+  const label = h("span", { class: "eyebrow" });
+  const value = h("div", { class: "value" });
+  const note = h("span", { class: "note" });
+  const el = h("div", { class: "card kpi" }, label, value, note);
+  let last = null;
+  return {
+    el,
+    set(labelText, text, unit, noteText, tone) {
+      label.textContent = labelText;
+      const key = `${text}${unit ?? ""}`;
+      if (key !== last) {
+        if (last !== null) bump(value);
+        last = key;
+        value.replaceChildren(h("span", {}, text, unit ? h("small", {}, unit) : null));
+      }
+      note.textContent = noteText;
+      el.className = `card kpi${tone ? ` is-${tone}` : ""}`;
+    },
   };
-  const cViol = counter("Violations"), cPeople = counter("People"), cChecks = counter("Worker checks"), cComp = counter("Compliance");
-  cViol.el.classList.add("is-bad");
-
-  // Chart, violations feed, people strip
-  const chartSlot = h("div", { class: "chart-wrap" });
-  const chartCard = h("section", { class: "card card-pad" },
-    h("div", { class: "card-head" },
-      h("div", {}, h("h2", {}, "Compliance over time"), h("p", {}, "Workers per checked frame, filled in as the video is inspected.")),
-      h("div", { class: "legend" },
-        h("span", {}, h("i", { style: "background:var(--good)" }), "PPE OK"),
-        h("span", {}, h("i", { style: "background:var(--critical)" }), "PPE violation"),
-        h("span", {}, h("i", { style: "background:var(--warning)" }), "Item not visible"),
-        h("span", {}, h("i", { style: "background:var(--muted)" }), "Not checked"))),
-    chartSlot);
-  const feed = h("div", { class: "events live-feed" });
-  const feedEmpty = h("div", { class: "empty-note" }, h("span", { html: icons.check }),
-    "No violations so far. Every worker checked so far has the required PPE.");
-  const feedCount = h("span", { class: "pill failed", hidden: true });
-  const feedCard = h("section", { class: "card card-pad" },
-    h("div", { class: "card-head" },
-      h("div", {}, h("h2", {}, "Violations found so far ", feedCount),
-        h("p", {}, "Newest first. A violation appears once it has been seen in two checks in a row. Click one to open it."))),
-    feedEmpty, feed);
-  const strip = h("div", { class: "live-people" });
-  const stripCard = h("section", { class: "card card-pad" },
-    h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "People found so far"),
-      h("p", {}, "Each worker keeps one ID. Click a person to see every photo of them taken so far."))),
-    strip);
-
-  page.append(headSlot,
-    h("section", { class: "card progress-card" }, preview,
-      h("div", { class: "stats" }, stage, pct, h("div", { class: "bar" }, bar), eta, activity,
-        h("div", { class: "live-stats" }, cViol.el, cPeople.el, cChecks.el, cComp.el),
-        h("p", { class: "hint" }, "You can leave this page; the run keeps going and appears in the sidebar."))),
-    chartCard, feedCard, stripCard);
-
-  const cards = new Map(); // incident key -> {el, img, time}
-  const chips = new Map(); // person id -> {el, status}
-  let lastFrames = -1, lastPoints = -1, lastStatus = null;
-  const stream = { on: false, failed: false };
-  const started = { t: performance.now(), f: run.progress_fraction };
-
-  page.update = (run) => {
-    const m = run.meta;
-    const s = run.summary;
-    if (m.status !== lastStatus) {
-      headSlot.replaceChildren(header(run));
-      lastStatus = m.status;
-    }
-    const frac = run.progress_fraction;
-    const queued = m.status === "queued";
-    stage.textContent = queued ? "Queued" : "Inspecting";
-    pct.textContent = `${Math.round(frac * 100)}%`;
-    bar.style.width = `${frac * 100}%`;
-    clock.textContent = ` ${fmt.time(frac * duration)} / ${fmt.time(duration)}`;
-    badge.hidden = queued || !m.progress.frames_done;
-    // Time left, from the speed since this page opened.
-    const done = frac - started.f, secs = (performance.now() - started.t) / 1000;
-    eta.textContent = queued ? "Waiting for the previous run to finish."
-      : done > 0.03 && secs > 4 ? `About ${fmt.duration((secs / done) * (1 - frac))} left`
-        : "Estimating time left…";
-
-    // The preview plays along with the inspection: a live run streams every frame (MJPEG),
-    // others refresh a still as frames are written. If the stream drops, refresh the still.
-    if (m.progress.frames_done !== lastFrames && m.progress.frames_done > 0) {
-      lastFrames = m.progress.frames_done;
-      if (m.options.live && m.status === "running" && !stream.failed) {
-        if (!stream.on) {
-          stream.on = true;
-          previewImg.onerror = () => { stream.failed = true; previewImg.onerror = null; };
-          previewImg.src = api.urls.live(id);
-          previewImg.classList.add("is-loaded");
-        }
-      } else {
-        swapImage(previewImg, api.urls.preview(id));
-      }
-      waiting.hidden = true;
-    }
-    // What the pipeline is doing right now, so a slow PPE check doesn't look like a freeze.
-    const checking = m.progress.checking ?? 0;
-    activity.hidden = queued || lastFrames < 1;
-    activity.classList.toggle("is-checking", checking > 0);
-    activity.replaceChildren(h("span", { class: "spinner small", "aria-hidden": "true" }),
-      checking ? `Checking PPE on ${plural(checking, "worker")} at ${fmt.time(frac * duration)}…`
-        : "Tracking workers and drawing the video…");
-    if (lastFrames < 1) {
-      waiting.hidden = false;
-      waiting.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), h("span", {},
-        queued ? "Waiting for the previous run to finish…"
-          : "Starting up: loading the person detector and checking the first workers…"));
-    }
-    if (!s) return;
-
-    bump(cViol.value, String(s.events.length));
-    cViol.note.textContent = s.events.length ? `${plural(s.violation_checks, "worker check")}` : "none yet";
-    cViol.el.classList.toggle("has-value", s.events.length > 0);
-    const flagged = s.people.filter((p) => p.state === "flagged").length;
-    bump(cPeople.value, String(s.people.length));
-    cPeople.note.textContent = flagged ? `${flagged} flagged` : "none flagged";
-    bump(cChecks.value, String(s.worker_checks));
-    cChecks.note.textContent = `${plural(s.frames_analysed, "frame")}`;
-    bump(cComp.value, s.compliance_rate == null ? "–" : `${Math.round(s.compliance_rate * 100)}%`);
-    cComp.note.textContent = "of judged checks";
-
-    if (s.timeline.length !== lastPoints) {
-      lastPoints = s.timeline.length;
-      timelineChart(chartSlot, s.timeline, { duration, interval: m.options.analysis_interval_sec });
-    }
-
-    // Violations: add new incidents at the top, update ones that are still going.
-    feedEmpty.hidden = s.events.length > 0;
-    feedCount.hidden = !s.events.length;
-    feedCount.textContent = String(s.events.length);
-    const items = eventItems(run, [...s.events].reverse());
-    items.forEach((e, i) => {
-      const key = `${e.track_id}-${e.time_sec}`;
-      let c = cards.get(key);
-      if (!c) {
-        const img = h("img", { alt: `Worker at ${fmt.timePrecise(e.time_sec)}` });
-        const time = h("span", { class: "time" });
-        const tags = h("div", { class: "tags" });
-        const el = h("button", { class: "event is-new", type: "button", title: "Open image" },
-          h("div", { class: "thumb" }, img), h("div", { class: "body" }, time, tags));
-        c = { el, img, time, tags, snap: null };
-        cards.set(key, c);
-      }
-      c.el.onclick = () => openLightbox(items, i);
-      c.time.textContent = [e.track_id != null ? `#${e.track_id}` : null, incidentTime(e),
-        e.checks > 1 ? plural(e.checks, "check") : null].filter(Boolean).join(" · ");
-      if (c.tags.textContent !== e.violations.join("")) c.tags.replaceChildren(...e.violations.map((v) => h("span", { class: "tag-bad" }, v)));
-      if (e.cropUrl && e.cropUrl !== c.snap) { c.snap = e.cropUrl; swapImage(c.img, e.cropUrl); }
-      if (feed.children[i] !== c.el) feed.insertBefore(c.el, feed.children[i] ?? null);
-    });
-
-    // People: one chip each, in order of appearance; status colour changes in place.
-    const order = [...s.people].sort((a, b) => a.first_seen_sec - b.first_seen_sec || a.id - b.id);
-    for (const p of order) {
-      let c = chips.get(p.id);
-      if (!c) {
-        const img = h("img", { alt: `Person ${p.id}` });
-        const status = h("span", { class: "status" });
-        const el = h("button", { type: "button", class: "live-person is-new", title: `Open person #${p.id}`,
-          onclick: () => openProfile(run, p.id) },
-          h("div", { class: "photo" }, img, h("span", { class: "pid" }, `#${p.id}`)), status);
-        c = { el, img, status, checks: -1 };
-        chips.set(p.id, c);
-        strip.append(el);
-      }
-      c.el.className = `live-person is-${{ flagged: "bad", unverified: "unverified", brief: "brief", ok: "ok" }[p.state] ?? "ok"}${c.el.classList.contains("is-new") ? " is-new" : ""}`;
-      c.status.textContent = p.state === "flagged" ? p.status_label.replace(/^PPE Violation \(\d+\) - /, "Missing: ") : p.status_label;
-      // The photo is replaced when a bigger view of the person is saved; refresh it as checks come in.
-      if (p.photo && p.checks !== c.checks) { c.checks = p.checks; swapImage(c.img, `${api.urls.person(id, p.photo)}?v=${p.checks}`); }
-    }
-    if (!s.people.length && !strip.children.length) strip.replaceChildren(h("p", { class: "hint" }, "Nobody checked yet."));
-    else strip.querySelector(":scope > p.hint")?.remove();
-  };
-  return page;
 }
 
-// ---------------------------------------------------------------- failed
-
-function renderFailed(root, run, { onDeleted }) {
-  root.replaceChildren(h("div", { class: "page" },
-    header(run, [rerunButton(run), deleteButton(run, onDeleted)]),
-    h("div", { class: "alert", role: "alert" },
-      h("h3", {}, "This run failed"),
-      h("p", {}, run.meta.error || "Unknown error.")),
-    h("div", {}, h("a", { class: "btn btn-primary", href: "#new" }, "Start a new inspection"))));
+function legendItems(points) {
+  return [
+    h("span", {}, h("i", { style: "background:var(--good)" }), "PPE OK"),
+    h("span", {}, h("i", { style: "background:var(--critical)" }), "PPE violation"),
+    points.some((p) => p.unverified) ? h("span", {}, h("i", { style: "background:var(--warning)" }), "Item not visible") : null,
+    points.some((p) => p.too_far || p.unchecked)
+      ? h("span", {}, h("i", { style: "background:var(--muted)" }), "Not checked (too far, new or failed)") : null,
+  ].filter(Boolean);
 }
 
-// ---------------------------------------------------------------- dashboard
-
-function kpi(label, value, note, tone) {
-  return h("div", { class: `card kpi ${tone ? `is-${tone}` : ""}` },
-    h("span", { class: "eyebrow" }, label),
-    h("div", { class: "value" }, value),
-    h("span", { class: "note" }, note));
-}
-
-function timelineCard(s, m, video) {
-  const box = h("div", { class: "chart-wrap" });
-  const card = h("section", { class: "card card-pad" },
-    h("div", { class: "card-head" },
-      h("div", {}, h("h2", {}, "Compliance over time"),
-        h("p", {}, video ? "Workers per checked frame. Click a column to jump the video there." : "Workers per checked frame so far.")),
-      h("div", { class: "legend" },
-        h("span", {}, h("i", { style: "background:var(--good)" }), "PPE OK"),
-        h("span", {}, h("i", { style: "background:var(--critical)" }), "PPE violation"),
-        s.timeline.some((p) => p.unverified)
-          ? h("span", {}, h("i", { style: "background:var(--warning)" }), "Item not visible") : null,
-        s.timeline.some((p) => p.too_far || p.unchecked)
-          ? h("span", {}, h("i", { style: "background:var(--muted)" }), "Not checked (too far, new or failed)") : null)),
-    box);
-  const chart = timelineChart(box, s.timeline, {
-    duration: m.options.max_seconds ? Math.min(m.options.max_seconds, m.video.duration_sec) : m.video.duration_sec,
-    interval: m.options.analysis_interval_sec,
-    onSeek: video ? (t) => { video.currentTime = t + 0.05; video.play().catch(() => {}); } : null,
-  });
-  if (video) {
-    const sync = () => chart.setPlayhead(video.currentTime);
-    video.addEventListener("timeupdate", sync);
-    video.addEventListener("seeked", sync);
-  }
-  return card;
-}
-
-function byTypeCard(s, onPick) {
+function byTypeBody(s, onPick, live) {
   const max = Math.max(1, ...s.by_type.map((t) => t.count));
   const body = s.by_type.length
     ? h("div", { class: "hbars" }, s.by_type.map((t) => h("button", { type: "button", class: "hbar is-link",
         title: `Show the ${t.label} violations`, onclick: () => onPick(t.label) },
         h("div", { class: "row" }, h("span", {}, t.label), h("b", { class: "num" }, t.count)),
         h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(t.count / max) * 100}%` })))))
-    : h("div", { class: "empty-note" }, h("span", { html: icons.check }), "No violations: nobody's status showed missing PPE.");
+    : h("div", { class: "empty-note" }, h("span", { html: icons.check }),
+      live ? "No violations so far." : "No violations: nobody's status showed missing PPE.");
 
   // Share of worker checks where an item couldn't be seen; above half, its results say little.
   const share = (t) => t.count / Math.max(1, s.worker_checks);
@@ -463,104 +276,35 @@ function byTypeCard(s, onPick) {
          `${plural(s.too_small_checks, "worker sighting")} too far away to check; left out of all figures.`) : null,
       ]
     : [];
-
-  return h("section", { class: "card card-pad" },
-    h("div", { class: "card-head" },
-      h("div", {}, h("h2", {}, "Violations by type"), h("p", {}, "Counted per incident: one person missing the item over consecutive checks. Click one to list it."))),
-    body, ...unv);
+  return [body, ...unv].filter(Boolean); // replaceChildren would print null as text
 }
 
-function peopleCard(run, s, video) {
-  if (!s.tracked) {
-    return h("section", { class: "card card-pad" },
-      h("div", { class: "card-head" }, h("h2", {}, "People")),
-      h("p", { class: "hint" }, "This run was made before person tracking was added. Run the video again to see each worker's ID and status."));
-  }
-  let filter = "all";
-  const grid = h("div", { class: "people" });
-  const filters = h("div", { class: "filters", role: "group", "aria-label": "Filter people" });
-  const state = (p) => p.state ?? (p.ok ? "ok" : "flagged"); // older servers sent only ok
-  const count = (k) => s.people.filter((p) => state(p) === k).length;
-  const LABELS = [["flagged", "Flagged"], ["unverified", "Not verified"], ["brief", "Seen briefly"], ["ok", "PPE OK"]];
-  const statusClass = { flagged: "bad", unverified: "unverified", brief: "brief", ok: "ok" };
-  const cardClass = { flagged: "bad", unverified: "unverified", brief: "brief", ok: "ok" };
-
-  // The card opens the person's profile: every photo of them, with counts per class.
-  const open = (p) => openProfile(run, p.id, { onShowInVideo: (e) => seekTo(video, e.time_sec) });
-
-  function draw() {
-    filters.replaceChildren(...[["all", `All (${s.people.length})`],
-      ...LABELS.filter(([k]) => count(k)).map(([k, label]) => [k, `${label} (${count(k)})`])]
-      .map(([k, label]) => h("button", { type: "button", "aria-pressed": String(filter === k),
-        onclick: () => { filter = k; draw(); } }, label)));
-    const order = { flagged: 0, unverified: 1, brief: 2, ok: 3 };
-    const list = s.people.filter((p) => filter === "all" || state(p) === filter)
-      .sort((a, b) => order[state(a)] - order[state(b)] || a.id - b.id);
-    grid.replaceChildren(...list.map((p) => {
-      const st = state(p);
-      const items = p.missing.map((t) => h("div", { class: "pm-row" },
-        h("span", {}, t.label),
-        h("span", { class: "num" }, `${t.count} of ${p.checks}`),
-        h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(t.count / Math.max(1, p.checks)) * 100}%` }))));
-      const detail = {
-        flagged: p.incidents ? `${plural(p.incidents, "incident")} · ${fmt.time(p.violation_sec ?? 0)} in violation` : null,
-        unverified: `An item couldn't be seen in ${p.unverified_checks} of ${plural(p.checks, "check")}`,
-        brief: `Not checked often enough for a verdict (${plural(p.checks, "check")})`,
-        ok: p.violation_checks ? `${plural(p.violation_checks, "single-check misread")} ignored by the vote` : null,
-      }[st];
-      return h("button", { class: `person is-${cardClass[st]}`, type: "button",
-        title: `Open the profile of person #${p.id}`, onclick: () => open(p) },
-        h("div", { class: "photo" },
-          p.photo ? h("img", { src: api.urls.person(run.meta.id, p.photo), alt: `Person ${p.id}`, loading: "lazy" }) : null,
-          h("span", { class: "pid" }, `#${p.id}`)),
-        h("div", { class: "body" },
-          h("span", { class: `status ${statusClass[st]}` }, p.status_label),
-          detail ? h("span", { class: "occasional" }, detail) : null,
-          h("span", { class: "meta num" },
-            `On screen ${fmt.time(p.first_seen_sec)}–${fmt.time(p.last_seen_sec)} · ${plural(p.checks, "check")}` +
-            (p.failed_checks ? ` · ${p.failed_checks} failed` : "")),
-          items.length ? h("div", { class: "pm" }, items) : h("span", { class: "meta" }, "No missing item in any check")));
-    }));
-  }
-  draw();
-  return h("section", { class: "card card-pad" },
-    h("div", { class: "card-head" },
-      h("div", {}, h("h2", {}, "People"),
-        h("p", {}, `Each worker keeps one ID through the video. A person is flagged when their status showed an item missing, i.e. it was missing in at least ${run.meta.options.tuning?.confirm_checks ?? 2} of their recent checks, the same rule as the boxes in the video. Bars show single checks.`)),
-      filters),
-    grid);
-}
-
-function renderDashboard(root, run, { onDeleted }) {
+function buildResults(run, { onDeleted }) {
   const m = run.meta;
-  const s = run.summary;
-  const video = h("video", { src: api.urls.video(m.id), poster: api.urls.preview(m.id),
-    controls: true, playsinline: true, preload: "metadata" });
+  const id = m.id;
+  const duration = m.options.max_seconds ? Math.min(m.options.max_seconds, m.video.duration_sec) : m.video.duration_sec;
+  const page = h("div", { class: "page", "data-view": "results", "data-run": id });
+  const headSlot = h("div");
+
+  // ---- player: the live view while processing, the annotated video when done ----
+  const liveImg = h("img", { class: "player-live", alt: "The video as it is being inspected" });
+  const waiting = h("div", { class: "wait" });
+  const clock = h("span", { class: "num" });
+  const badge = h("span", { class: "live-badge", hidden: true }, h("i"), h("span", { class: "live-text" }, "Live"), clock);
   const playerMsg = h("div", { class: "player-msg", hidden: true },
     "This browser can't play the annotated video. Use the Video button above to download it.");
-  // The first load can fail while the server is still converting an older video,
-  // so retry once before showing the message, and hide it as soon as anything plays.
-  let retried = false;
-  video.addEventListener("error", () => {
-    if (!retried) {
-      retried = true;
-      setTimeout(() => { video.src = `${api.urls.video(m.id)}?retry=1`; video.load(); }, 2500);
-      return;
-    }
-    playerMsg.hidden = false;
-  });
-  for (const ev of ["loadeddata", "canplay", "playing"]) video.addEventListener(ev, () => { playerMsg.hidden = true; });
+  const media = h("div", { class: "player-media" }, liveImg, waiting, badge, playerMsg);
 
-  const compliance = s.compliance_rate;
-  const timeShare = s.frames_analysed ? s.frames_with_violation / s.frames_analysed : null;
-  const judged = s.ok_checks + s.violation_checks;
-  const attempted = s.worker_checks + (s.failed_checks ?? 0);
-  const failedShare = attempted ? (s.failed_checks ?? 0) / attempted : 0;
-  const notJudged = [s.unverified_checks ? `${s.unverified_checks} not verified` : null,
-    s.pending_checks ? `${s.pending_checks} first checks` : null].filter(Boolean).join(", ");
-  const flagged = s.people.filter((p) => (p.state ?? (p.ok ? "ok" : "flagged")) === "flagged").length;
+  const stage = h("span", { class: "eyebrow" });
+  const pct = h("b", { class: "pp-pct num" });
+  const eta = h("span", { class: "pp-eta" });
+  const bar = h("i");
+  const activity = h("p", { class: "live-activity" });
+  const progress = h("div", { class: "player-progress" },
+    h("div", { class: "pp-row" }, stage, pct, eta), h("div", { class: "bar" }, bar), activity);
+  const checkedNote = h("span", { class: "num" });
+  const foot = h("div", { class: "player-foot", hidden: true }, h("span", {}, "Annotated output"), checkedNote);
 
-  // The player keeps the video's own shape (portrait too); the metrics sit to its right.
   const watch = h("div", { class: "watch" });
   const setShape = (w, hgt) => {
     if (!w || !hgt) return;
@@ -568,45 +312,212 @@ function renderDashboard(root, run, { onDeleted }) {
     watch.classList.toggle("is-portrait", hgt > w);
   };
   setShape(m.video.width, m.video.height);
-  video.addEventListener("loadedmetadata", () => setShape(video.videoWidth, video.videoHeight));
-  const detections = detectionsCard(run, s, video);
+
+  // ---- metrics beside the video ----
+  const kComp = kpiTile(), kViol = kpiTile(), kTime = kpiTile(), kPeople = kpiTile();
+  const failedBanner = h("div", { class: "warn-banner", hidden: true });
+  const detections = createDetections(run);
+  const typeBody = h("div");
+  const typeCard = h("section", { class: "card card-pad" },
+    h("div", { class: "card-head" },
+      h("div", {}, h("h2", {}, "Violations by type"), h("p", {}, "Counted per incident: one person missing the item over consecutive checks. Click one to list it."))),
+    typeBody);
 
   watch.append(
-    h("section", { class: "card player" }, video,
-      playerMsg,
-      h("div", { class: "player-foot" },
-        h("span", {}, "Annotated output"),
-        h("span", { class: "num" }, `${s.frames_analysed} frames checked` +
-          (s.arrival_checks ? ` · ${plural(s.arrival_checks, "arrival check")}` : "")))),
+    h("section", { class: "card player" }, media, progress, foot),
     h("div", { class: "watch-side" },
-      h("div", { class: "kpis" },
-        kpi("Compliance", compliance == null ? "–" : h("span", {}, (compliance * 100).toFixed(0), h("small", {}, "%")),
-          `${s.ok_checks} of ${judged} judged worker checks had all PPE` + (notJudged ? ` (${notJudged} left out)` : ""),
-          compliance == null ? null : compliance >= 0.95 ? "good" : "bad"),
-        kpi("Violations", String(s.events.length),
-          s.events.length ? `${plural(s.events.length, "incident")} over ${plural(s.violation_checks, "worker check")}` : "none found",
-          s.events.length ? "bad" : "good"),
-        kpi("Time with a violation", timeShare == null ? "–" : h("span", {}, (timeShare * 100).toFixed(0), h("small", {}, "%")),
-          `${s.frames_with_violation} of ${s.frames_analysed} checked frames`),
-        s.tracked
-          ? kpi("People tracked", String(s.people.length),
-              `${flagged} flagged · peak ${s.peak_workers} on screen at once`, flagged ? "bad" : "good")
-          : kpi("Workers on screen", String(s.peak_workers), `peak · ${s.avg_workers} on average`)),
-      s.failed_checks ? h("div", { class: "warn-banner", role: failedShare > 0.1 ? "alert" : null },
-        h("b", {}, `${plural(s.failed_checks, "worker check")} failed`),
-        ` (${Math.round(failedShare * 100)}% of checks). The model didn't answer, so ${s.failed_checks === 1 ? "that check says" : "those checks say"} nothing about the worker. ` +
-        (failedShare > 0.1 ? "Results for this run are incomplete; consider running it again." : "")) : null,
-      byTypeCard(s, (label) => detections.showItem(label))));
+      h("div", { class: "kpis" }, kComp.el, kViol.el, kTime.el, kPeople.el),
+      failedBanner, typeCard));
 
-  root.replaceChildren(h("div", { class: "page" },
-    header(run, [
-      h("a", { class: "btn", href: api.urls.video(m.id, true), download: "" }, h("span", { html: icons.download, style: "display:inline-flex" }), "Video"),
-      h("a", { class: "btn", href: api.urls.report(m.id), download: "" }, h("span", { html: icons.download, style: "display:inline-flex" }), "Report"),
-      rerunButton(run),
-      deleteButton(run, onDeleted),
-    ]),
-    watch,
-    detections.el,
-    timelineCard(s, m, video),
-    peopleCard(run, s, video)));
+  // ---- compliance over time ----
+  const chartBox = h("div", { class: "chart-wrap" });
+  const chartIntro = h("p");
+  const chartLegend = h("div", { class: "legend" });
+  const chartCard = h("section", { class: "card card-pad" },
+    h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Compliance over time"), chartIntro), chartLegend),
+    chartBox);
+
+  page.append(headSlot, watch, detections.el, chartCard);
+
+  let video = null;
+  let chart = null;
+  let chartPoints = [];
+  let settling = false; // completed while watching: showing 100% before the video appears
+  let lastStatus = null, lastFrames = -1, lastChart = null, lastTypes = null;
+  const stream = { on: false, failed: false };
+  const started = { t: performance.now(), f: run.progress_fraction };
+
+  function showVideo() {
+    video = h("video", { src: api.urls.video(id), poster: api.urls.preview(id),
+      controls: true, playsinline: true, preload: "metadata" });
+    // The first load can fail while the server is still converting the video,
+    // so retry once before showing the message, and hide it as soon as anything plays.
+    let retried = false;
+    video.addEventListener("error", () => {
+      if (!retried) {
+        retried = true;
+        setTimeout(() => { video.src = `${api.urls.video(id)}?retry=1`; video.load(); }, 2500);
+        return;
+      }
+      playerMsg.hidden = false;
+    });
+    for (const ev of ["loadeddata", "canplay", "playing"]) video.addEventListener(ev, () => { playerMsg.hidden = true; });
+    video.addEventListener("loadedmetadata", () => setShape(video.videoWidth, video.videoHeight));
+    const sync = () => chart?.setPlayhead(video.currentTime);
+    video.addEventListener("timeupdate", sync);
+    video.addEventListener("seeked", sync);
+    liveImg.removeAttribute("src"); // closes the live stream
+    liveImg.replaceWith(video);
+    waiting.hidden = badge.hidden = true;
+    detections.setVideo(video);
+    drawChart();
+  }
+
+  page.update = (run) => {
+    const m = run.meta;
+    const s = run.summary;
+    const done = m.status === "completed";
+    if (m.status !== lastStatus) {
+      headSlot.replaceChildren(header(run, done ? [
+        h("a", { class: "btn", href: api.urls.video(id, true), download: "" }, h("span", { html: icons.download, style: "display:inline-flex" }), "Video"),
+        h("a", { class: "btn", href: api.urls.report(id), download: "" }, h("span", { html: icons.download, style: "display:inline-flex" }), "Report"),
+        rerunButton(run),
+        deleteButton(run, onDeleted),
+      ] : []));
+      lastStatus = m.status;
+    }
+
+    // ---- player and progress ----
+    const frac = done ? 1 : run.progress_fraction;
+    const queued = m.status === "queued";
+    if (done) {
+      // Watched to the end: fill the bar to 100% and hold it a moment before settling.
+      const watched = lastFrames >= 0 && !video && !settling;
+      const settle = () => {
+        if (!video) showVideo();
+        progress.hidden = true;
+        foot.hidden = false;
+      };
+      if (watched) {
+        settling = true;
+        stage.textContent = "Done";
+        pct.textContent = "100%";
+        bar.style.width = "100%";
+        eta.textContent = "Finishing the video…";
+        activity.hidden = true;
+        setTimeout(settle, 1200);
+      } else if (!settling) {
+        settle();
+      }
+      checkedNote.textContent = s ? `${s.frames_analysed} frames checked` +
+        (s.arrival_checks ? ` · ${plural(s.arrival_checks, "arrival check")}` : "") : "";
+    } else {
+      stage.textContent = queued ? "Queued" : "Inspecting";
+      pct.textContent = `${Math.round(frac * 100)}%`;
+      bar.style.width = `${frac * 100}%`;
+      clock.textContent = ` ${fmt.time(frac * duration)} / ${fmt.time(duration)}`;
+      badge.hidden = queued || !m.progress.frames_done;
+      // Time left, from the speed since this page opened.
+      const gained = frac - started.f, secs = (performance.now() - started.t) / 1000;
+      eta.textContent = queued ? "Waiting for the previous run to finish"
+        : gained > 0.03 && secs > 4 ? `About ${fmt.duration((secs / gained) * (1 - frac))} left` : "Estimating time left…";
+      // The live view plays along with the inspection: a live run streams every frame (MJPEG),
+      // others refresh a still as frames are written. If the stream drops, refresh the still.
+      if (m.progress.frames_done !== lastFrames && m.progress.frames_done > 0) {
+        lastFrames = m.progress.frames_done;
+        if (m.options.live && m.status === "running" && !stream.failed) {
+          if (!stream.on) {
+            stream.on = true;
+            liveImg.onerror = () => { stream.failed = true; liveImg.onerror = null; };
+            liveImg.src = api.urls.live(id);
+            liveImg.classList.add("is-loaded");
+          }
+        } else {
+          swapImage(liveImg, api.urls.preview(id));
+        }
+        waiting.hidden = true;
+      }
+      // What the pipeline is doing right now, so a slow PPE check doesn't look like a freeze.
+      const checking = m.progress.checking ?? 0;
+      activity.hidden = queued || lastFrames < 1;
+      activity.classList.toggle("is-checking", checking > 0);
+      activity.replaceChildren(h("span", { class: "spinner small", "aria-hidden": "true" }),
+        checking ? `Checking PPE on ${plural(checking, "worker")} at ${fmt.time(frac * duration)}…`
+          : "Tracking workers and drawing the video…");
+      if (lastFrames < 1) {
+        waiting.hidden = false;
+        waiting.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), h("span", {},
+          queued ? "Waiting for the previous run to finish…"
+            : "Starting up: loading the person detector and checking the first workers…"));
+      }
+    }
+
+    // ---- figures ----
+    const so = done ? "" : " so far";
+    if (!s) {
+      kComp.set("Compliance", "–", null, "No worker checked yet");
+      kViol.set("Violations", "0", null, "none yet");
+      kTime.set("Time with a violation", "–", null, "No frame checked yet");
+      kPeople.set("People tracked", "0", null, "nobody seen yet");
+      typeBody.replaceChildren(h("p", { class: "hint" }, "Appears as workers are checked."));
+    } else {
+      const compliance = s.compliance_rate;
+      const timeShare = s.frames_analysed ? s.frames_with_violation / s.frames_analysed : null;
+      const judged = s.ok_checks + s.violation_checks;
+      const attempted = s.worker_checks + (s.failed_checks ?? 0);
+      const failedShare = attempted ? (s.failed_checks ?? 0) / attempted : 0;
+      const notJudged = [s.unverified_checks ? `${s.unverified_checks} not verified` : null,
+        s.pending_checks ? `${s.pending_checks} first checks` : null].filter(Boolean).join(", ");
+      const flagged = s.people.filter((p) => (p.state ?? (p.ok ? "ok" : "flagged")) === "flagged").length;
+      kComp.set("Compliance", compliance == null ? "–" : (compliance * 100).toFixed(0), compliance == null ? null : "%",
+        `${s.ok_checks} of ${judged} judged worker checks had all PPE` + (notJudged ? ` (${notJudged} left out)` : ""),
+        compliance == null ? null : compliance >= 0.95 ? "good" : "bad");
+      kViol.set("Violations", String(s.events.length), null,
+        s.events.length ? `${plural(s.events.length, "incident")} over ${plural(s.violation_checks, "worker check")}` : `none found${so}`,
+        s.events.length ? "bad" : done ? "good" : null);
+      kTime.set("Time with a violation", timeShare == null ? "–" : (timeShare * 100).toFixed(0), timeShare == null ? null : "%",
+        `${s.frames_with_violation} of ${s.frames_analysed} checked frames`);
+      if (s.tracked || !done) {
+        kPeople.set("People tracked", String(s.people.length), null,
+          `${flagged} flagged · peak ${s.peak_workers} on screen at once`, flagged ? "bad" : done ? "good" : null);
+      } else {
+        kPeople.set("Workers on screen", String(s.peak_workers), null, `peak · ${s.avg_workers} on average`);
+      }
+
+      failedBanner.hidden = !s.failed_checks;
+      failedBanner.setAttribute("role", failedShare > 0.1 ? "alert" : "status");
+      if (s.failed_checks) {
+        failedBanner.replaceChildren(h("b", {}, `${plural(s.failed_checks, "worker check")} failed`),
+          ` (${Math.round(failedShare * 100)}% of checks). The model didn't answer, so ${s.failed_checks === 1 ? "that check says" : "those checks say"} nothing about the worker. ` +
+          (failedShare > 0.1 ? "Results for this run are incomplete; consider running it again." : ""));
+      }
+
+      const typesKey = JSON.stringify([s.by_type, s.unverified, s.too_small_checks, s.worker_checks, done]);
+      if (typesKey !== lastTypes) {
+        lastTypes = typesKey;
+        typeBody.replaceChildren(...byTypeBody(s, (label) => detections.showItem(label), !done));
+      }
+    }
+
+    detections.update(run);
+
+    chartPoints = s?.timeline ?? [];
+    drawChart();
+  };
+
+  // The chart is redrawn as checks come in, and once more with seeking when the video is there.
+  function drawChart() {
+    const key = `${chartPoints.length}:${!!video}`;
+    if (key === lastChart) return;
+    lastChart = key;
+    chartIntro.textContent = video ? "Workers per checked frame. Click a column to jump the video there."
+      : "Workers per checked frame, filled in as the video is inspected.";
+    chartLegend.replaceChildren(...legendItems(chartPoints));
+    chart = timelineChart(chartBox, chartPoints, {
+      duration, interval: run.meta.options.analysis_interval_sec,
+      onSeek: video ? (t) => { video.currentTime = t + 0.05; video.play().catch(() => {}); } : null,
+    });
+    if (video) chart.setPlayhead(video.currentTime);
+  }
+  return page;
 }

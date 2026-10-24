@@ -1,7 +1,7 @@
-// Developer options: tune Moondream prompts, decision rules, requests and tracking,
-// and try a prompt on one worker image before saving.
+// Developer options: the Moondream API key, tune Moondream prompts, decision rules, requests
+// and tracking, and try a prompt on one worker image before saving.
 
-import { api } from "../api.js";
+import { api, apiKey } from "../api.js";
 import { fmt, h } from "../ui.js";
 
 const ITEM_LABELS = { helmet: "Helmet", vest: "Vest", gloves: "Gloves", boots: "Boots", goggles: "Goggles", mask: "Mask" };
@@ -408,6 +408,10 @@ export async function renderDev(root) {
     ...c.groups.map((g) => group(g, (s) => setting(s)))));
   const cards = { rules: settingCards[0], voting: settingCards[1], requests: settingCards[2], tracking: settingCards[3] };
 
+  // ---- Moondream access ------------------------------------------------------------
+  const accessCard = await buildAccess();
+  accessCard.id = "dev-access";
+
   // ---- playground ----------------------------------------------------------------
   const playground = await buildPlayground(() => draft);
   playground.id = "dev-playground";
@@ -447,11 +451,11 @@ export async function renderDev(root) {
     controls.push({ refresh: refreshCount });
     return { id, body, setOpen };
   }
-  const sections = [playground, promptCard, itemsCard, cards.rules, cards.voting, cards.requests, cards.tracking]
+  const sections = [accessCard, playground, promptCard, itemsCard, cards.rules, cards.voting, cards.requests, cards.tracking]
     .map(collapsible);
 
   const nav = h("nav", { class: "dev-nav", "aria-label": "Sections" },
-    [["playground", "Playground"], ["prompts", "Prompts"], ["items", "PPE items"], ["rules", "Decision rules"],
+    [["access", "Access"], ["playground", "Playground"], ["prompts", "Prompts"], ["items", "PPE items"], ["rules", "Decision rules"],
       ["voting", "Status and voting"], ["requests", "Requests"], ["tracking", "Tracking"]]
       .map(([id, label]) => h("button", { type: "button", onclick: () => {
         sections.find((x) => x.id === id)?.setOpen(true);
@@ -484,6 +488,7 @@ export async function renderDev(root) {
       h("div", { class: "actions" }, viewSwitch, resetBtn)),
     h("div", { class: "dev-bar" }, nav, h("div", { class: "actions" }, dirtyPill, discardBtn, saveBtn)),
     errorBox,
+    accessCard,
     playground,
     promptCard,
     itemsCard,
@@ -492,6 +497,60 @@ export async function renderDev(root) {
   setView(view);
   refreshBar();
   return () => {};
+}
+
+// ---- Moondream access ------------------------------------------------------------
+// The API key for new runs, re-runs and the playground. It stays in this browser tab
+// (see apiKey in api.js) and is sent with each request; the server never stores it.
+async function buildAccess() {
+  const config = await api.config();
+  const local = config.server_key_configured && config.server_moondream_local;
+  const input = h("input", { id: "dev-key", class: "input", type: "password", autocomplete: "off", value: apiKey.get(),
+    placeholder: local ? "Leave empty to use this server's GPU"
+      : config.server_key_configured ? "Leave empty to use the server key" : "Paste your Moondream API key" });
+  const status = h("div", { class: "key-status", "aria-live": "polite" });
+  const showBtn = h("button", { type: "button", class: "btn", onclick: () => {
+    input.type = input.type === "password" ? "text" : "password";
+    showBtn.textContent = input.type === "password" ? "Show" : "Hide";
+  } }, "Show");
+  const describe = () => {
+    status.className = "key-status";
+    status.textContent = apiKey.get() ? "Saved for this browser tab. New runs use Moondream Cloud with this key."
+      : local ? "No key entered: runs use Moondream on this server's GPU."
+      : config.server_key_configured ? "No key entered: runs use the key in the server's .env."
+      : "No key entered, and the server has none: runs can't start until one is added.";
+  };
+  input.addEventListener("input", () => { apiKey.set(input.value); describe(); });
+  const testBtn = h("button", { type: "button", class: "btn", onclick: async () => {
+    testBtn.disabled = true;
+    status.className = "key-status";
+    status.textContent = "Checking with Moondream…";
+    try {
+      const r = await api.checkKey(apiKey.get());
+      status.className = `key-status ${r.ok ? "ok" : "bad"}`;
+      status.textContent = !r.ok ? r.message
+        : r.source === "form" ? `${r.message} Runs will use Moondream Cloud with the entered key.`
+        : local ? r.message : `${r.message} Using the server's key.`;
+    } catch (e) {
+      status.className = "key-status bad";
+      status.textContent = e.message;
+    } finally {
+      testBtn.disabled = false;
+    }
+  } }, "Test key");
+  describe();
+  return h("section", { class: "card card-pad dev-card" },
+    h("div", { class: "card-head" }, h("div", {},
+      h("h2", {}, "Moondream access"),
+      h("p", {}, "The API key used for new inspections, re-runs and the playground. It is kept in this browser tab until you close it, and never saved on the server."))),
+    h("div", { class: "field" },
+      h("label", { class: "label", for: "dev-key" }, "Moondream API key"),
+      h("div", { class: "input-row" }, input, showBtn, testBtn),
+      h("div", { class: "hint" }, local
+        ? "Optional. If empty, Moondream runs on this server's GPU. With a key, runs use Moondream Cloud."
+        : config.server_key_configured ? "Optional. If empty, the key in the server's .env is used."
+        : "Required: the server has no key in its .env."),
+      status));
 }
 
 // ---- prompt playground ------------------------------------------------------------
@@ -510,8 +569,6 @@ async function buildPlayground(getDraft) {
   } });
   const itemSelect = h("select", { class: "input", id: "pg-item" },
     Object.entries(ITEM_LABELS).map(([k, v]) => h("option", { value: k }, v)));
-  const keyInput = h("input", { class: "input", id: "pg-key", type: "password", autocomplete: "off",
-    placeholder: "Moondream key (empty = server key)" });
   const runBtn = h("button", { class: "btn btn-primary", type: "button", disabled: true, onclick: runTest }, "Run test");
   const result = h("div", { class: "pg-result" }, h("p", { class: "hint" }, "Pick a worker image, choose an item and run the test. Unsaved changes are used."));
 
@@ -547,7 +604,7 @@ async function buildPlayground(getDraft) {
     const form = new FormData();
     form.append("item", itemSelect.value);
     form.append("tuning", JSON.stringify(getDraft()));
-    if (keyInput.value.trim()) form.append("api_key", keyInput.value.trim());
+    if (apiKey.get()) form.append("api_key", apiKey.get());
     if (pick.file) form.append("image", pick.file);
     else { form.append("run_id", pick.run_id); form.append("folder", pick.folder); form.append("name", pick.name); }
     runBtn.disabled = true;
@@ -614,8 +671,8 @@ async function buildPlayground(getDraft) {
         thumbs,
         h("label", { class: "btn", for: "pg-upload", style: "justify-self:start" }, "Or upload an image"), upload,
         h("div", { class: "pg-controls" },
-          h("label", { class: "label", for: "pg-item" }, "Item"), itemSelect,
-          h("label", { class: "label", for: "pg-key" }, "API key"), keyInput),
+          h("label", { class: "label", for: "pg-item" }, "Item"), itemSelect),
+        h("p", { class: "hint" }, "Uses the key under Moondream access, or the server's key if none is entered."),
         runBtn),
       result));
   runSelect.id = "pg-run";

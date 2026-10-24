@@ -1,13 +1,13 @@
 // Run view: live progress while processing, results dashboard when done.
 
-import { api, ServerUnreachable } from "../api.js";
+import { api, apiKey, ServerUnreachable } from "../api.js";
 import { timelineChart } from "../charts.js";
 import { openLightbox } from "../lightbox.js";
 import { openProfile } from "../profile.js";
 import { fmt, h, icons, plural, statusPill } from "../ui.js";
+import { detectionsCard, eventItems, incidentTime, seekTo } from "./detections.js";
 
 const POLL_MS = 1000;
-const EVENTS_PAGE = 24;
 
 let tuningDefaults = null; // developer-settings defaults, to mark runs made with custom settings
 
@@ -70,15 +70,12 @@ function header(run, actions = []) {
       h("span", { class: "chip" }, `Checks: ${items}`),
       h("span", { class: "chip" }, `Every ${m.options.analysis_interval_sec}s`),
       m.options.max_seconds ? h("span", { class: "chip" }, `First ${m.options.max_seconds}s only`) : null,
-      h("span", { class: "chip" }, m.key_source === "server" ? "Server API key" : "Entered API key"),
-      m.moondream_endpoint ? h("span", { class: "chip", title: `Endpoint: ${m.moondream_endpoint}` },
-        `Model: ${m.options.tuning.moondream_model}`) : null,
       customChip(m.options.tuning),
       m.rerun_of ? h("a", { class: "chip chip-link", href: `#run/${encodeURIComponent(m.rerun_of)}` }, "Re-run of an earlier run") : null));
 }
 
 // "Run again": inspect the same video as a new run, with the current developer settings
-// or the ones this run used. The panel asks for a key only if the server has none.
+// or the ones this run used. It uses the API key from Developer options, or the server's.
 function rerunButton(run) {
   const wrap = h("div", { class: "rerun" });
   const btn = h("button", { class: "btn", type: "button", "aria-expanded": "false", onclick: toggle }, "Run again");
@@ -91,8 +88,7 @@ function rerunButton(run) {
     const radio = (value, label, note, checked) => h("label", { class: "rerun-opt" },
       h("input", { type: "radio", name: "rerun-settings", value, checked }),
       h("span", {}, h("b", {}, label), h("span", { class: "hint" }, note)));
-    const key = h("input", { class: "input", type: "password", id: "rerun-key", autocomplete: "off",
-      placeholder: config.server_key_configured ? "Empty = the server's key" : "Moondream API key" });
+    const noKey = !apiKey.get() && !config.server_key_configured;
     const error = h("p", { class: "form-error", hidden: true });
     const start = h("button", { class: "btn btn-primary", type: "button", onclick: go }, "Start");
     panel = h("div", { class: "rerun-panel card", role: "dialog", "aria-label": "Run this video again" },
@@ -102,7 +98,8 @@ function rerunButton(run) {
         radio("current", "Current developer settings",
           n ? `${n} change${n === 1 ? "" : "s"} from the defaults, as saved now` : "The defaults (nothing changed)", true),
         radio("original", "This run's settings", "Exactly as this run was made", false)),
-      h("label", { class: "label", for: "rerun-key" }, "Moondream API key"), key,
+      noKey ? h("div", { class: "dev-note" }, "This server has no API key. Add one in ",
+        h("a", { href: "#dev" }, "Developer options"), " first.") : null,
       error,
       h("div", { class: "rerun-actions" }, h("button", { class: "btn btn-ghost", type: "button", onclick: closePanel }, "Cancel"), start));
     wrap.append(panel);
@@ -113,10 +110,10 @@ function rerunButton(run) {
     async function go() {
       error.hidden = true;
       start.disabled = true;
-      start.textContent = "Checking key…";
+      start.textContent = "Starting…";
       try {
         const settings = panel.querySelector("input[name=rerun-settings]:checked").value;
-        const created = await api.rerun(run.meta.id, { settings, api_key: key.value.trim() || null });
+        const created = await api.rerun(run.meta.id, { settings, api_key: apiKey.get() || null });
         closePanel();
         location.hash = `#run/${encodeURIComponent(created.meta.id)}`;
       } catch (e) {
@@ -312,18 +309,18 @@ function buildLive(run) {
       }
       waiting.hidden = true;
     }
-    // What the pipeline is doing right now, so a slow Moondream answer doesn't look like a freeze.
+    // What the pipeline is doing right now, so a slow PPE check doesn't look like a freeze.
     const checking = m.progress.checking ?? 0;
     activity.hidden = queued || lastFrames < 1;
     activity.classList.toggle("is-checking", checking > 0);
     activity.replaceChildren(h("span", { class: "spinner small", "aria-hidden": "true" }),
-      checking ? `Asking Moondream about ${plural(checking, "worker")} at ${fmt.time(frac * duration)}…`
+      checking ? `Checking PPE on ${plural(checking, "worker")} at ${fmt.time(frac * duration)}…`
         : "Tracking workers and drawing the video…");
     if (lastFrames < 1) {
       waiting.hidden = false;
       waiting.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), h("span", {},
         queued ? "Waiting for the previous run to finish…"
-          : "Starting up: loading the person detector and checking the first workers with Moondream…"));
+          : "Starting up: loading the person detector and checking the first workers…"));
     }
     if (!s) return;
 
@@ -440,10 +437,11 @@ function timelineCard(s, m, video) {
   return card;
 }
 
-function byTypeCard(s) {
+function byTypeCard(s, onPick) {
   const max = Math.max(1, ...s.by_type.map((t) => t.count));
   const body = s.by_type.length
-    ? h("div", { class: "hbars" }, s.by_type.map((t) => h("div", { class: "hbar" },
+    ? h("div", { class: "hbars" }, s.by_type.map((t) => h("button", { type: "button", class: "hbar is-link",
+        title: `Show the ${t.label} violations`, onclick: () => onPick(t.label) },
         h("div", { class: "row" }, h("span", {}, t.label), h("b", { class: "num" }, t.count)),
         h("div", { class: "track" }, h("div", { class: "fill", style: `width:${(t.count / max) * 100}%` })))))
     : h("div", { class: "empty-note" }, h("span", { html: icons.check }), "No violations: nobody's status showed missing PPE.");
@@ -468,72 +466,8 @@ function byTypeCard(s) {
 
   return h("section", { class: "card card-pad" },
     h("div", { class: "card-head" },
-      h("div", {}, h("h2", {}, "Violations by type"), h("p", {}, "Counted per incident: one person missing the item over consecutive checks."))),
+      h("div", {}, h("h2", {}, "Violations by type"), h("p", {}, "Counted per incident: one person missing the item over consecutive checks. Click one to list it."))),
     body, ...unv);
-}
-
-function eventsCard(run, s, video) {
-  const types = s.by_type.map((t) => t.label);
-  let filter = null;
-  let shown = EVENTS_PAGE;
-  const grid = h("div", { class: "events" });
-  const more = h("div", { class: "more-row" });
-  const filters = h("div", { class: "filters", role: "group", "aria-label": "Filter violations" });
-
-  function draw() {
-    const list = s.events.filter((e) => !filter || e.violations.includes(filter));
-    filters.replaceChildren(...[null, ...types].map((t) => h("button", {
-      type: "button", "aria-pressed": String(filter === t),
-      onclick: () => { filter = t; shown = EVENTS_PAGE; draw(); },
-    }, t ?? `All (${s.events.length})`)));
-    const items = eventItems(run, list);
-    const showInVideo = (e) => seekTo(video, e.time_sec);
-    grid.replaceChildren(...list.slice(0, shown).map((e, i) => h("button", {
-      class: "event", type: "button", title: "Open image",
-      onclick: () => openLightbox(items, i, { onShowInVideo: showInVideo }),
-    },
-      h("div", { class: "thumb" }, e.snapshot
-        ? h("img", { src: api.urls.snapshot(run.meta.id, e.snapshot), alt: `Worker at ${fmt.timePrecise(e.time_sec)}`, loading: "lazy" })
-        : h("span", { class: "hint" }, "No snapshot")),
-      h("div", { class: "body" },
-        h("span", { class: "time" }, [e.track_id != null ? `#${e.track_id}` : null, incidentTime(e),
-          e.checks > 1 ? plural(e.checks, "check") : null].filter(Boolean).join(" · ")),
-        h("div", { class: "tags" }, e.violations.map((v) => h("span", { class: "tag-bad" }, v)))))));
-    more.replaceChildren(list.length > shown
-      ? h("button", { class: "btn", type: "button", onclick: () => { shown += EVENTS_PAGE; draw(); } }, `Show more (${list.length - shown} left)`)
-      : "");
-  }
-
-  if (!s.events.length) {
-    return h("section", { class: "card card-pad" },
-      h("div", { class: "card-head" }, h("h2", {}, "Violations")),
-      h("div", { class: "empty-note" }, h("span", { html: icons.check }), "No worker's status showed missing PPE at any point."));
-  }
-  draw();
-  return h("section", { class: "card card-pad" },
-    h("div", { class: "card-head" },
-      h("div", {}, h("h2", {}, "Violations"), h("p", {}, "One card per incident: a person whose status showed missing PPE, from the first to the last check in a row. Click to open; use ← → to browse.")),
-      filters),
-    grid, more);
-}
-
-function incidentTime(e) {
-  return e.end_sec != null && e.end_sec > e.time_sec
-    ? `${fmt.timePrecise(e.time_sec)}–${fmt.timePrecise(e.end_sec)}` : fmt.timePrecise(e.time_sec);
-}
-
-function seekTo(video, t) {
-  video.currentTime = t + 0.05;
-  video.scrollIntoView({ behavior: "smooth", block: "center" });
-  video.play().catch(() => {});
-}
-
-function eventItems(run, events) {
-  return events.map((e) => ({
-    ...e,
-    cropUrl: e.snapshot ? api.urls.snapshot(run.meta.id, e.snapshot) : null,
-    frameUrl: e.frame_image ? api.urls.frame(run.meta.id, e.frame_image) : null,
-  }));
 }
 
 function peopleCard(run, s, video) {
@@ -626,6 +560,44 @@ function renderDashboard(root, run, { onDeleted }) {
     s.pending_checks ? `${s.pending_checks} first checks` : null].filter(Boolean).join(", ");
   const flagged = s.people.filter((p) => (p.state ?? (p.ok ? "ok" : "flagged")) === "flagged").length;
 
+  // The player keeps the video's own shape (portrait too); the metrics sit to its right.
+  const watch = h("div", { class: "watch" });
+  const setShape = (w, hgt) => {
+    if (!w || !hgt) return;
+    watch.style.setProperty("--ar", (w / hgt).toFixed(4));
+    watch.classList.toggle("is-portrait", hgt > w);
+  };
+  setShape(m.video.width, m.video.height);
+  video.addEventListener("loadedmetadata", () => setShape(video.videoWidth, video.videoHeight));
+  const detections = detectionsCard(run, s, video);
+
+  watch.append(
+    h("section", { class: "card player" }, video,
+      playerMsg,
+      h("div", { class: "player-foot" },
+        h("span", {}, "Annotated output"),
+        h("span", { class: "num" }, `${s.frames_analysed} frames checked` +
+          (s.arrival_checks ? ` · ${plural(s.arrival_checks, "arrival check")}` : "")))),
+    h("div", { class: "watch-side" },
+      h("div", { class: "kpis" },
+        kpi("Compliance", compliance == null ? "–" : h("span", {}, (compliance * 100).toFixed(0), h("small", {}, "%")),
+          `${s.ok_checks} of ${judged} judged worker checks had all PPE` + (notJudged ? ` (${notJudged} left out)` : ""),
+          compliance == null ? null : compliance >= 0.95 ? "good" : "bad"),
+        kpi("Violations", String(s.events.length),
+          s.events.length ? `${plural(s.events.length, "incident")} over ${plural(s.violation_checks, "worker check")}` : "none found",
+          s.events.length ? "bad" : "good"),
+        kpi("Time with a violation", timeShare == null ? "–" : h("span", {}, (timeShare * 100).toFixed(0), h("small", {}, "%")),
+          `${s.frames_with_violation} of ${s.frames_analysed} checked frames`),
+        s.tracked
+          ? kpi("People tracked", String(s.people.length),
+              `${flagged} flagged · peak ${s.peak_workers} on screen at once`, flagged ? "bad" : "good")
+          : kpi("Workers on screen", String(s.peak_workers), `peak · ${s.avg_workers} on average`)),
+      s.failed_checks ? h("div", { class: "warn-banner", role: failedShare > 0.1 ? "alert" : null },
+        h("b", {}, `${plural(s.failed_checks, "worker check")} failed`),
+        ` (${Math.round(failedShare * 100)}% of checks). The model didn't answer, so ${s.failed_checks === 1 ? "that check says" : "those checks say"} nothing about the worker. ` +
+        (failedShare > 0.1 ? "Results for this run are incomplete; consider running it again." : "")) : null,
+      byTypeCard(s, (label) => detections.showItem(label))));
+
   root.replaceChildren(h("div", { class: "page" },
     header(run, [
       h("a", { class: "btn", href: api.urls.video(m.id, true), download: "" }, h("span", { html: icons.download, style: "display:inline-flex" }), "Video"),
@@ -633,32 +605,8 @@ function renderDashboard(root, run, { onDeleted }) {
       rerunButton(run),
       deleteButton(run, onDeleted),
     ]),
-    h("div", { class: "kpis" },
-      kpi("Compliance", compliance == null ? "–" : h("span", {}, (compliance * 100).toFixed(0), h("small", {}, "%")),
-        `${s.ok_checks} of ${judged} judged worker checks had all PPE` + (notJudged ? ` (${notJudged} left out)` : ""),
-        compliance == null ? null : compliance >= 0.95 ? "good" : "bad"),
-      kpi("Violations", String(s.events.length),
-        s.events.length ? `${plural(s.events.length, "incident")} over ${plural(s.violation_checks, "worker check")}` : "none found",
-        s.events.length ? "bad" : "good"),
-      kpi("Time with a violation", timeShare == null ? "–" : h("span", {}, (timeShare * 100).toFixed(0), h("small", {}, "%")),
-        `${s.frames_with_violation} of ${s.frames_analysed} checked frames`),
-      s.tracked
-        ? kpi("People tracked", String(s.people.length),
-            `${flagged} flagged · peak ${s.peak_workers} on screen at once`, flagged ? "bad" : "good")
-        : kpi("Workers on screen", String(s.peak_workers), `peak · ${s.avg_workers} on average`)),
-    s.failed_checks ? h("div", { class: `warn-banner`, role: failedShare > 0.1 ? "alert" : null },
-      h("b", {}, `${plural(s.failed_checks, "worker check")} failed`),
-      ` (${Math.round(failedShare * 100)}% of checks). Moondream didn't answer, so ${s.failed_checks === 1 ? "that check says" : "those checks say"} nothing about the worker. ` +
-      (failedShare > 0.1 ? "Results for this run are incomplete; check the server log and consider running it again." : "")) : null,
-    h("div", { class: "grid-main" },
-      h("section", { class: "card player" }, video,
-        playerMsg,
-        h("div", { class: "player-foot" },
-          h("span", {}, "Annotated output"),
-          h("span", { class: "num" }, `${s.frames_analysed} frames checked` +
-            (s.arrival_checks ? ` · ${plural(s.arrival_checks, "arrival check")}` : "")))),
-      byTypeCard(s)),
-    peopleCard(run, s, video),
+    watch,
+    detections.el,
     timelineCard(s, m, video),
-    eventsCard(run, s, video)));
+    peopleCard(run, s, video)));
 }

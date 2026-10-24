@@ -167,7 +167,7 @@ async def _check_key(verify: KeyVerifier, key: str, key_source: KeySource, endpo
         await run_in_threadpool(verify, key, endpoint)
     except KeyRejected as exc:
         hint = " It came from the server's .env." if key_source == KeySource.server else ""
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"{exc}{hint} Fix the key and try again.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"{exc}{hint} Fix the key in Developer options and try again.")
     except ModelRejected as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
     except MoondreamUnreachable as exc:

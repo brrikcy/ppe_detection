@@ -207,9 +207,9 @@ class RunRunner:
             self.store.update(run_id, status=RunStatus.completed, progress=progress,
                               finished_at=datetime.now(timezone.utc))
         except AuthError:
-            self._fail(run_id, "Moondream rejected the API key. Check it and start a new run.")
+            self._fail(run_id, "The API key was rejected. Update it in Developer options and start a new run.")
         except ModelError:
-            self._fail(run_id, f"The Moondream endpoint doesn't accept model {opts.tuning.moondream_model!r}. "
+            self._fail(run_id, f"The vision model endpoint doesn't accept model {opts.tuning.moondream_model!r}. "
                                "Change it in Developer options and start a new run.")
         except Exception as exc:
             log.exception("Run %s failed", run_id)

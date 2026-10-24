@@ -98,3 +98,14 @@ def test_runs_made_before_tracking_use_their_raw_checks():
         {"box": [0, 0, 10, 10], "violations": [], "unverified": []}]}]
     s = build_summary(tl)
     assert (s.violation_checks, s.ok_checks, len(s.events)) == (1, 1, 1) and not s.tracked
+
+
+def test_incident_records_when_it_was_detected_and_whether_it_was_resolved():
+    timeline = run("OOMMMMOO") + [entry(8.0 + i, worker(2, ["No Helmet"])) for i in range(4)]
+    for i, e in enumerate(timeline):
+        e["detected_at"] = f"2026-10-24T10:00:{i:02d}+00:00"
+    put_back_on, still_missing = build_summary(timeline).events
+    assert put_back_on.track_id == 1 and put_back_on.resolved is True
+    assert put_back_on.detected_at.isoformat() == "2026-10-24T10:00:03+00:00"  # first check shown red
+    assert still_missing.track_id == 2 and still_missing.resolved is False
+    assert build_summary(run("OOMMMM")).events[0].detected_at is None  # runs made before it was recorded

@@ -9,6 +9,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -292,7 +293,7 @@ def process_video(
                 counts["failed_in_a_row"] += 1
                 log.warning("PPE check failed at frame %d (%s)", idx, last_error)
                 if counts["failed_in_a_row"] >= tun.max_failed_checks:
-                    raise RuntimeError(f"Moondream failed on {counts['failed_in_a_row']} checks in a row, so the "
+                    raise RuntimeError(f"The PPE check failed on {counts['failed_in_a_row']} checks in a row, so the "
                                        f"run was stopped. Last error: {last_error}")
             else:
                 counts["failed_in_a_row"] = 0
@@ -314,6 +315,8 @@ def process_video(
                 "frame": idx,
                 "time_sec": round(idx / fps, 2),
                 "arrival": arrival,
+                # Wall-clock time the check's results were recorded: when each violation was detected.
+                "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "workers": [_worker_entry(r, statuses.get(r.track_id)) for r in current],
             }
             timeline.append(entry)

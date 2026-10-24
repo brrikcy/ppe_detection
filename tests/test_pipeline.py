@@ -279,7 +279,10 @@ def test_slow_moondream_gives_the_same_report(tmp_path):
         reports.append(process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: FakePeople(schedule)))
         a.close()
     fast, slow = reports
-    assert slow["timeline"] == fast["timeline"] and slow["frames_written"] == fast["frames_written"] == 40
+    # detected_at is the wall-clock time of each check, so it differs; everything else must not.
+    timeline = lambda r: [{k: v for k, v in e.items() if k != "detected_at"} for e in r["timeline"]]  # noqa: E731
+    assert all(e["detected_at"] for r in reports for e in r["timeline"])
+    assert timeline(slow) == timeline(fast) and slow["frames_written"] == fast["frames_written"] == 40
     assert [e["frame"] for e in fast["timeline"]] == [0, 5, 10, 15, 20, 25, 30, 35]
 
 

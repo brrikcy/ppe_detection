@@ -21,7 +21,7 @@ from ...schemas.runs import (
     KeySource, PersonDetail, RunDetail, RunListItem, RunMeta, RunOptions, RunStatus, VideoInfo,
 )
 from ...services.keys import (
-    KeyRejected, KeyVerifier, MissingKey, ModelRejected, MoondreamUnreachable, resolve_key,
+    KeyRejected, KeyVerifier, MissingKey, ModelRejected, MoondreamUnreachable, endpoint_for, resolve_key,
 )
 from ...services.run_store import RunNotFound, RunStore
 from ...services.runner import RunRunner
@@ -107,13 +107,14 @@ async def create_run(
                              tuning=dev.get())
     except (MissingKey, ValueError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
-    await _check_key(verify, key, key_source)
+    endpoint = endpoint_for(key_source, settings)
+    await _check_key(verify, key, key_source, endpoint)
 
     suffix = Path(video.filename or "").suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                             f"Unsupported file type. Use one of: {', '.join(sorted(ALLOWED_SUFFIXES))}")
-    return await _start_run(store, runner, settings, Path(video.filename or "video").stem[:120], key, key_source,
+    return await _start_run(store, runner, Path(video.filename or "video").stem[:120], key, key_source, endpoint,
                             options, suffix, lambda dest: _save_upload(video, dest, settings.max_upload_mb * CHUNK))
 
 
@@ -145,9 +146,10 @@ async def rerun(
         key, key_source = resolve_key(body.api_key, settings)
     except MissingKey as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
-    await _check_key(verify, key, key_source)
+    endpoint = endpoint_for(key_source, settings)
+    await _check_key(verify, key, key_source, endpoint)
     options = meta.options.model_copy(update={"tuning": dev.get() if body.settings == "current" else meta.options.tuning})
-    return await _start_run(store, runner, settings, meta.name, key, key_source, options, source.suffix,
+    return await _start_run(store, runner, meta.name, key, key_source, endpoint, options, source.suffix,
                             lambda dest: _link_or_copy(source, dest), rerun_of=run_id)
 
 
@@ -159,10 +161,10 @@ def _link_or_copy(src: Path, dest: Path) -> None:
         shutil.copy2(src, dest)
 
 
-async def _check_key(verify: KeyVerifier, key: str, key_source: KeySource) -> None:
+async def _check_key(verify: KeyVerifier, key: str, key_source: KeySource, endpoint: str) -> None:
     """Check the key before accepting a run, so a wrong key never becomes a failed run."""
     try:
-        await run_in_threadpool(verify, key)
+        await run_in_threadpool(verify, key, endpoint)
     except KeyRejected as exc:
         hint = " It came from the server's .env." if key_source == KeySource.server else ""
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"{exc}{hint} Fix the key and try again.")
@@ -172,8 +174,8 @@ async def _check_key(verify: KeyVerifier, key: str, key_source: KeySource) -> No
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
 
 
-async def _start_run(store: RunStore, runner: RunRunner, settings: Settings, name: str, key: str,
-                     key_source: KeySource, options: RunOptions, suffix: str, write_input,
+async def _start_run(store: RunStore, runner: RunRunner, name: str, key: str, key_source: KeySource,
+                     endpoint: str, options: RunOptions, suffix: str, write_input,
                      rerun_of: str | None = None) -> RunDetail:
     """Creates the run folder, puts the video in it with `write_input(dest)`, and queues the run."""
     run_id = store.new_id()
@@ -191,7 +193,7 @@ async def _start_run(store: RunStore, runner: RunRunner, settings: Settings, nam
 
     meta = RunMeta(
         id=run_id,
-        moondream_endpoint=settings.moondream_endpoint,
+        moondream_endpoint=endpoint,
         name=name,
         created_at=datetime.now(timezone.utc),
         key_source=key_source,

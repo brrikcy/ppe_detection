@@ -134,7 +134,7 @@ class RunRunner:
             analysis_interval_sec=opts.analysis_interval_sec,
             person_model=str(self.person_model) if self.person_model else None,
             tuning=opts.tuning,
-            moondream_endpoint=self.moondream_endpoint,
+            moondream_endpoint=meta.moondream_endpoint or self.moondream_endpoint,
         )
         feed = LiveFeed()
         with self._live_lock:

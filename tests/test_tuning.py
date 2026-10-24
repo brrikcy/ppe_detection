@@ -129,7 +129,7 @@ def client(tmp_path):
         return PPEAnalyzer(cfg, model=FakeModel())
 
     app = create_app(Settings(data_dir=tmp_path / "runs", server_api_key="srv"), analyzer_factory=factory,
-                     key_verifier=lambda k: None, people_factory=lambda fps: FakePeople())
+                     key_verifier=lambda k, e: None, people_factory=lambda fps: FakePeople())
     with TestClient(app) as c:
         c.configs, c.tmp = configs, tmp_path
         yield c

@@ -12,8 +12,11 @@ export async function renderNewRun(root, { onCreated }) {
   let previewFailed = false; // browser can't decode the file; the server still can
 
   // ---- API key ----
+  // An entered key always uses Moondream Cloud; without one, the server's Moondream (here, its GPU).
+  const localMoondream = config.server_key_configured && config.server_moondream_local;
   const keyInput = h("input", { id: "api-key", class: "input", type: "password", autocomplete: "off",
-    placeholder: config.server_key_configured ? "Leave empty to use the server key" : "Paste your Moondream API key" });
+    placeholder: localMoondream ? "Leave empty to use this server's GPU"
+      : config.server_key_configured ? "Leave empty to use the server key" : "Paste your Moondream API key" });
   const keyStatus = h("div", { class: "key-status", "aria-live": "polite" });
   const showBtn = h("button", { type: "button", class: "btn", onclick: () => {
     keyInput.type = keyInput.type === "password" ? "text" : "password";
@@ -26,7 +29,9 @@ export async function renderNewRun(root, { onCreated }) {
     try {
       const r = await api.checkKey(keyInput.value.trim());
       keyStatus.className = `key-status ${r.ok ? "ok" : "bad"}`;
-      keyStatus.textContent = r.ok ? `${r.message} Using the ${r.source === "server" ? "server's" : "entered"} key.` : r.message;
+      keyStatus.textContent = !r.ok ? r.message
+        : r.source === "form" ? `${r.message} Runs will use Moondream Cloud with the entered key.`
+        : localMoondream ? r.message : `${r.message} Using the server's key.`;
     } catch (e) {
       keyStatus.className = "key-status bad";
       keyStatus.textContent = e.message;
@@ -134,7 +139,9 @@ export async function renderNewRun(root, { onCreated }) {
         h("div", { class: "field" },
           h("label", { class: "label", for: "api-key" }, "Moondream API key"),
           h("div", { class: "input-row" }, keyInput, showBtn, testBtn),
-          h("div", { class: "hint" }, config.server_key_configured
+          h("div", { class: "hint" }, localMoondream
+            ? "Optional. If empty, Moondream runs on this server's GPU. With a key, the run uses Moondream Cloud. The key is never saved."
+            : config.server_key_configured
             ? "Optional. If empty, the key in the server's .env is used. The key is never saved."
             : "Required: the server has no key in its .env. The key is used for this run only and never saved."),
           keyStatus),
@@ -176,7 +183,7 @@ export async function renderNewRun(root, { onCreated }) {
     body.append("live", String(liveBox.checked));
 
     runBtn.disabled = true;
-    runBtn.textContent = "Uploading and checking key…";
+    runBtn.textContent = !keyInput.value.trim() && localMoondream ? "Uploading…" : "Uploading and checking key…";
     uploadBar.hidden = false;
     const fill = uploadBar.querySelector("i");
     try {

@@ -181,6 +181,8 @@ class RunDetail(BaseModel):
 
 class AppConfig(BaseModel):
     server_key_configured: bool
+    # The server's MOONDREAM_ENDPOINT is Moondream on this machine; an entered key uses Moondream Cloud.
+    server_moondream_local: bool = False
     ppe_items: list[dict]
     defaults: RunOptions
     max_upload_mb: int

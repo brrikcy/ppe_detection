@@ -401,7 +401,8 @@ export async function renderDev(root) {
   const settingCards = CARDS.map((c) => card(c.id, c.title, c.intro,
     c.endpointNote ? h("p", { class: "endpoint-note" },
       "Endpoint: ", h("code", {}, state.moondream_endpoint),
-      h("span", { class: "hint" }, " · set MOONDREAM_ENDPOINT in the server's .env to use another provider or a self-hosted server")) : null,
+      h("span", { class: "hint" }, " · set MOONDREAM_ENDPOINT in the server's .env to use another provider or a self-hosted server."
+        + " A key entered in a form always uses Moondream Cloud.")) : null,
     c.endpointNote ? h("datalist", { id: "md-models" },
       ["moondream3.1-9B-A2B", "moondream3-preview"].map((m) => h("option", { value: m }))) : null,
     ...c.groups.map((g) => group(g, (s) => setting(s)))));

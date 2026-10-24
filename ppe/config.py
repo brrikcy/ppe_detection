@@ -28,11 +28,11 @@ PPE_CATALOG: dict[str, PPEItem] = {
 }
 
 
-def endpoint_from_env() -> str:
-    """MOONDREAM_ENDPOINT, or Moondream Cloud. Must be an http(s) base URL like https://host/v1."""
-    url = (os.getenv("MOONDREAM_ENDPOINT") or DEFAULT_ENDPOINT).strip().rstrip("/")
+def endpoint_from_env(var: str = "MOONDREAM_ENDPOINT") -> str:
+    """The endpoint in `var`, or Moondream Cloud. Must be an http(s) base URL like https://host/v1."""
+    url = (os.getenv(var) or DEFAULT_ENDPOINT).strip().rstrip("/")
     if not url.startswith(("https://", "http://")):
-        raise ValueError(f"MOONDREAM_ENDPOINT must start with https:// or http://, got {url!r}")
+        raise ValueError(f"{var} must start with https:// or http://, got {url!r}")
     return url
 
 

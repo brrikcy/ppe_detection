@@ -60,7 +60,8 @@ If `opencv-python-headless` is already installed, Ultralytics' `opencv-python` d
 | Variable | Default | Used by | Purpose |
 |---|---|---|---|
 | `MOONDREAM_API_KEY` | — | both | Moondream key. In the web app it's the fallback when the form field is empty. |
-| `MOONDREAM_ENDPOINT` | `https://api.moondream.ai/v1` | both | Base URL of the Moondream API: Moondream Cloud, another provider with the same API, or a self-hosted server. The API key is sent here. |
+| `MOONDREAM_ENDPOINT` | `https://api.moondream.ai/v1` | both | Base URL of the Moondream API: Moondream Cloud, another provider with the same API, or a self-hosted server. `MOONDREAM_API_KEY` is sent here. |
+| `MOONDREAM_CLOUD_ENDPOINT` | `https://api.moondream.ai/v1` | web app | Where runs go when a key is entered in the form. An entered key is a Moondream Cloud key, so it doesn't go to `MOONDREAM_ENDPOINT`. |
 | `PERSON_MODEL` | `models/yolo11s.pt` | both | YOLO weights for person tracking (run from the project folder). |
 | `MAX_WORKERS` | `4` | command line | Parallel Moondream requests. In the web app this is a developer option. |
 | `REQUIRED_PPE` | `helmet,vest` | command line | PPE items to check. The web app takes them from the form. |
@@ -75,7 +76,7 @@ python run.py          # opens http://127.0.0.1:8000
 python run.py --port 8080 --no-browser
 ```
 
-1. Optionally enter a Moondream API key. If you leave it empty, the server uses `MOONDREAM_API_KEY` from `.env`. **Test key** checks it with one call. The key is checked again when you start a run, so a wrong key shows on the form instead of creating a failed run. Keys are never written to disk.
+1. Optionally enter a Moondream API key. With a key, the run uses Moondream Cloud (`MOONDREAM_CLOUD_ENDPOINT`). If you leave it empty, the server uses `MOONDREAM_API_KEY` with `MOONDREAM_ENDPOINT` from `.env`; on the GPU server that is Moondream on its own GPU. **Test key** checks it with one call. The key is checked again when you start a run, so a wrong key shows on the form instead of creating a failed run. Moondream on the same machine has no key to check, so for it the check only asks whether the server is running, and doesn't wait for the GPU. Keys are never written to disk.
 2. Drop in a video, choose the required PPE, the check interval (0.5, 1, 2 or 5s) and optionally a time limit, then click **Run inference**. The form shows an estimate of the Moondream calls. **Live mode** (on by default) plays the video at its normal speed while it's inspected, streamed to the page frame by frame; see [Live mode](#live-mode).
 3. While the run is processing, the page fills in live: the annotated video as it's being written (refreshed about twice a second) with a **Live** badge and the video time, progress with an estimate of the time left, what it's doing right now (e.g. "Asking Moondream about 3 workers at 0:04…", so a slow answer doesn't look like a freeze), running counts (violations, people, worker checks, compliance), the compliance chart growing column by column, violations sliding in as they're found (newest first), and a strip of the people found so far, coloured by status (click one to open their profile). The page is updated in place rather than redrawn, and images swap in once loaded, so nothing flickers. You can leave the page; the run keeps going.
 4. When it finishes, the dashboard shows:
@@ -217,7 +218,7 @@ Supported PPE items: `helmet`, `vest`, `gloves`, `boots`, `goggles`, `mask` (def
 
 Every request names its model (`moondream3.1-9B-A2B` by default; change it in Developer options or with `--model`). If the endpoint doesn't accept the model, a run is refused at the start (the key check sends one request with the same model), and a run that hits it mid-way stops with a message pointing to Developer options. Each run records the endpoint and model it used (`moondream_endpoint` and `tuning.moondream_model` in the report; the model is also shown on the run page).
 
-**Moondream Cloud is closing on 13 November 2026** ([Moondream's announcement](https://moondream.ai/blog/moondream-is-joining-prime-intellect)). To keep using Moondream after that, point `MOONDREAM_ENDPOINT` at a service with the same API, such as Prime Intellect's hosted Moondream, or a self-hosted Moondream server, and set the model ID that service uses.
+**Moondream Cloud is closing on 13 November 2026** ([Moondream's announcement](https://moondream.ai/blog/moondream-is-joining-prime-intellect)). To keep using Moondream after that, point `MOONDREAM_ENDPOINT` at a service with the same API, such as Prime Intellect's hosted Moondream, or a self-hosted Moondream server, and set the model ID that service uses. For keys entered in the form, set `MOONDREAM_CLOUD_ENDPOINT` to that service too.
 
 ## Live mode
 
@@ -232,7 +233,7 @@ Decoding, tracking and drawing + encoding run on separate threads, in both modes
 
 ## Live demo on a GPU
 
-Runs the app and Moondream itself on one GPU machine, so PPE checks don't go over the internet. Moondream runs locally with **Photon**, Moondream's own inference engine (`pip install moondream`; the same `moondream3.1-9B-A2B` model as the Cloud, no API key for the base model). `moondream_server/serve.py` serves it with the Cloud's REST API, so the pipeline only needs `MOONDREAM_ENDPOINT` changed.
+Runs the app and Moondream itself on one GPU machine, so PPE checks don't go over the internet. Moondream runs locally with **Photon**, Moondream's own inference engine (`pip install moondream`; the same `moondream3.1-9B-A2B` model as the Cloud, no API key for the base model). `moondream_server/serve.py` serves it with the Cloud's REST API, so the pipeline only needs `MOONDREAM_ENDPOINT` changed. In the web app, leave the key field empty to use the GPU. Enter a key to run on Moondream Cloud instead.
 
 1. **GPU.** NVIDIA Ampere or newer with 24 GB or more, e.g. AWS `g5.2xlarge` (A10G 24 GB, 8 vCPU) or `g6e.xlarge` (L40S 48 GB). Not `g4dn` (T4): Photon doesn't support it. New AWS accounts often have a quota of 0 vCPUs for "Running On-Demand G and VT instances"; request 8 in Service Quotas before you need it.
 2. **Instance.** Ubuntu 22.04 or 24.04 with NVIDIA drivers (AWS "Deep Learning Base OSS Nvidia Driver GPU AMI"), 100 GB disk. Security group: SSH from your IP only. The app has no login, so don't open port 8000 to the internet.

@@ -34,7 +34,7 @@ def client(tmp_path):
         seen_keys.append(config.api_key)
         return PPEAnalyzer(config, model=FakeModel())
 
-    def verify(key):
+    def verify(key, endpoint):
         if key == "bad-key":
             raise KeyRejected("Moondream rejected this API key.")
 

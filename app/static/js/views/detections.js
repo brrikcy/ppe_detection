@@ -12,12 +12,13 @@ const PLAY = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><p
 const SORT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10l4-4 4 4M8 14l4 4 4-4"/></svg>`;
 const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
 
+// dir: the first direction when a sort is picked; the biggest violations come first.
 const SORTS = {
-  time: { label: "Video time", key: (e) => e.time_sec },
-  worker: { label: "Worker", key: (e) => e.track_id ?? -1 },
-  items: { label: "Items missing", key: (e) => e.violations.length },
-  duration: { label: "Duration", key: (e) => e.duration },
-  checks: { label: "Checks", key: (e) => e.checks },
+  time: { label: "Video time", key: (e) => e.time_sec, dir: 1 },
+  worker: { label: "Worker", key: (e) => e.track_id ?? -1, dir: 1 },
+  items: { label: "Items missing", key: (e) => e.violations.length, dir: -1 },
+  duration: { label: "Duration", key: (e) => e.duration, dir: -1 },
+  checks: { label: "Checks", key: (e) => e.checks, dir: -1 },
 };
 
 export function eventItems(run, events) {
@@ -86,7 +87,7 @@ export function createDetections(run) {
     if (sel.el.dataset.options === key) return;
     sel.el.dataset.options = key;
     const value = sel.el.value;
-    sel.el.replaceChildren(h("option", { value: "" }, "All"), options.map(([v, text]) => h("option", { value: v }, text)));
+    sel.el.replaceChildren(h("option", { value: "" }, "All"), ...options.map(([v, text]) => h("option", { value: v }, text)));
     sel.el.value = options.some(([v]) => v === value) ? value : "";
   };
   const fItem = select("item", "Missing PPE");
@@ -103,7 +104,11 @@ export function createDetections(run) {
   };
   const fFrom = timeInput("from", "0:00");
   const fTo = timeInput("to", fmt.time(m.video.duration_sec));
-  const sortSelect = h("select", { class: "input", onchange: () => { state.sort = sortSelect.value; draw(); } },
+  const sortSelect = h("select", { class: "input", onchange: () => {
+    state.sort = sortSelect.value;
+    state.dir = SORTS[state.sort].dir;
+    draw();
+  } },
     Object.entries(SORTS).map(([k, o]) => h("option", { value: k }, o.label)));
   const dirBtn = h("button", { type: "button", class: "btn det-dir", onclick: () => { state.dir *= -1; draw(); } });
 
@@ -138,7 +143,7 @@ export function createDetections(run) {
   } });
   const sortHead = (label, key) => h("th", { "aria-sort": "none", "data-sort": key },
     h("button", { type: "button", class: "det-sort-btn", onclick: () => {
-      state.dir = state.sort === key ? -state.dir : 1;
+      state.dir = state.sort === key ? -state.dir : SORTS[key].dir;
       state.sort = key;
       draw();
     } }, label, h("span", { html: SORT, class: "det-sort-icon" })));

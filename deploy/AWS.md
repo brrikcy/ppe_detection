@@ -58,9 +58,9 @@ All the commands below use these variables.
    If `git pull` changed `requirements*.txt`, run `bash deploy/setup_gpu.sh` before `start.sh`. Running it again is safe. Moondream loads in about 2 minutes (the weights are already downloaded). Wait for `Uvicorn running on http://127.0.0.1:8000`.
 4. **Open the app** from the laptop through a tunnel, in a second terminal:
    ```bash
-   ssh -i ~/.ssh/pavevqa-key-my.pem -L 8000:localhost:8000 ubuntu@<IP>
+   ssh -i ~/.ssh/pavevqa-key-my.pem -o ExitOnForwardFailure=yes -L 127.0.0.1:8000:localhost:8000 ubuntu@<IP>
    ```
-   then go to http://localhost:8000.
+   then go to http://127.0.0.1:8000. If ssh exits with `Address already in use`, the laptop's own app (`python run.py`) is on port 8000: stop it first.
 
 ## Stop (end of day)
 
@@ -116,4 +116,6 @@ Then continue with step 3 of **Start**. The first `start.sh` downloads the Moond
 
 - **`setup_gpu.sh` prints only the GPU name for minutes.** That's normal: apt and pip run quietly. The next line is `PyTorch GPU: NVIDIA L4`.
 - **`CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED`, or "Couldn't warm up the person detector".** The AMI puts its own older cuDNN on `LD_LIBRARY_PATH`, and PyTorch loads that instead of the cuDNN it ships with. `setup_gpu.sh` and `start.sh` clear the variable. If you run Python on the instance by hand (`moondream_server.bench`, `yolo export`), run `unset LD_LIBRARY_PATH` first.
+- **The page asks for a Moondream API key, or runs are slow.** The browser is on the laptop's own app, not the GPU server. With a plain `-L 8000:localhost:8000` and the laptop app already on `127.0.0.1:8000`, ssh only warns and listens on `[::1]:8000`, so `localhost:8000` reaches either app. Stop the laptop app and use the tunnel command in step 4. Check with `curl -s http://127.0.0.1:8000/api/config`: the GPU server says `"server_key_configured":true`.
+- **Moondream takes about 2 minutes to load after each start.** It reads 9.8 GB of weights from the disk, which reads at 125 MB/s (the gp3 default), so about 80 s of that is disk reading. Runs after that start within a few seconds.
 - **`ExpiredToken` / `RequestExpired` from `aws`.** The keys have expired; see step 0.

@@ -11,8 +11,8 @@ One GPU instance runs the web app and Moondream together (see "Live demo on a GP
 | Image | Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04) |
 | Disk | 100 GB gp3, deleted together with the instance |
 | Network | public subnet `subnet-04a7aed25d6d3f50e` of VPC `vpc-0eb4b50519b36e783` (`robolyze-demo-vpc`) |
-| Security group | `sg-0bd7a973302a9599d` (`ppe-detection-sg`): SSH (port 22) from one IP only. Port 8000 is not open; use an SSH tunnel. |
-| SSH key | key pair `pavevqa-key-my`, private key `~/.ssh/pavevqa-key-my.pem` on the laptop (never in the repo), user `ubuntu` |
+| Security group | `sg-0bd7a973302a9599d` (`ppe-detection-sg`): SSH (port 22) only from the IPs we allow. Port 8000 is not open; use an SSH tunnel. |
+| SSH key | key pair `pavevqa-key-my`, private key `~/.ssh/pavevqa-key-my.pem` on the laptop (never in the repo), user `ubuntu`. Colleagues use their own keys; see **Give a colleague access**. |
 | On the instance | repository in `~/ppe_detection` (branch `feat/aws_compute`), set up with `deploy/setup_gpu.sh`. Moondream weights cached in `~/.cache/huggingface` (9.8 GB). |
 
 - The public IP changes every time the instance starts.
@@ -61,6 +61,32 @@ All the commands below use these variables.
    ssh -i ~/.ssh/pavevqa-key-my.pem -o ExitOnForwardFailure=yes -L 127.0.0.1:8000:localhost:8000 ubuntu@<IP>
    ```
    then go to http://127.0.0.1:8000. If ssh exits with `Address already in use`, the laptop's own app (`python run.py`) is on port 8000: stop it first.
+
+## Give a colleague access
+
+A colleague uses the same app through their own tunnel. They don't need to install anything.
+
+1. **Add their SSH key.** Never share `pavevqa-key-my.pem`. The colleague makes a key if they have none (`ssh-keygen -t ed25519`) and sends you the public key, `~/.ssh/id_ed25519.pub`. Add it on the instance:
+   ```bash
+   ssh -i $KEY ubuntu@$IP 'cat >> ~/.ssh/authorized_keys' < their_key.pub
+   ```
+2. **Allow their IP.** The colleague runs `curl -s https://checkip.amazonaws.com` and sends you the result:
+   ```bash
+   aws ec2 authorize-security-group-ingress --group-id $SG --protocol tcp --port 22 --cidr <their-ip>/32
+   ```
+3. **Send them the instance IP** (it changes each day). They open the tunnel of step 4 of **Start** with their own key:
+   ```bash
+   ssh -i ~/.ssh/id_ed25519 -o ExitOnForwardFailure=yes -L 127.0.0.1:8000:localhost:8000 ubuntu@<IP>
+   ```
+
+You then share one app and one GPU:
+- Only one person starts the app (step 3 of **Start**). Nobody else runs `start.sh`, and nobody presses Ctrl+C in the `ppe` tmux session.
+- Runs at the same time are slower, and each person sees the other's runs.
+- When the instance stops, it stops for everyone.
+
+To test their own code changes, the colleague can instead run the app on their laptop and use only Moondream on the GPU. They tunnel port 2020 (`-L 127.0.0.1:2020:localhost:2020`) and put `MOONDREAM_ENDPOINT=http://127.0.0.1:2020/v1` and `MOONDREAM_API_KEY=local` in their `.env`. Person detection then runs on their laptop's CPU, and each crop goes to the GPU and back over the internet, so this is slower than the shared app.
+
+To remove access, delete their line from `~/.ssh/authorized_keys` on the instance and revoke their IP as in step 2 of **Start**.
 
 ## Stop (end of day)
 
@@ -117,5 +143,6 @@ Then continue with step 3 of **Start**. The first `start.sh` downloads the Moond
 - **`setup_gpu.sh` prints only the GPU name for minutes.** That's normal: apt and pip run quietly. The next line is `PyTorch GPU: NVIDIA L4`.
 - **`CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED`, or "Couldn't warm up the person detector".** The AMI puts its own older cuDNN on `LD_LIBRARY_PATH`, and PyTorch loads that instead of the cuDNN it ships with. `setup_gpu.sh` and `start.sh` clear the variable. If you run Python on the instance by hand (`moondream_server.bench`, `yolo export`), run `unset LD_LIBRARY_PATH` first.
 - **The page asks for a Moondream API key, or runs are slow.** The browser is on the laptop's own app, not the GPU server. With a plain `-L 8000:localhost:8000` and the laptop app already on `127.0.0.1:8000`, ssh only warns and listens on `[::1]:8000`, so `localhost:8000` reaches either app. Stop the laptop app and use the tunnel command in step 4. Check with `curl -s http://127.0.0.1:8000/api/config`: the GPU server says `"server_key_configured":true`.
+- **The tunnel prints `channel 2: open failed: connect failed: Connection refused` again and again.** The tunnel works, but the app on the instance isn't running, so the instance refuses each request the browser sends through the tunnel. This happens when the tmux session has ended: the app was stopped with Ctrl+C and `exit`, or it was started outside tmux and SSH disconnected. Check with `ssh -i $KEY ubuntu@$IP 'tmux ls; ss -ltn | grep 8000'`, then do step 3 of **Start** again. The tunnel can stay open. To leave tmux without stopping the app, press Ctrl+B then D.
 - **Moondream takes about 2 minutes to load after each start.** It reads 9.8 GB of weights from the disk, which reads at 125 MB/s (the gp3 default), so about 80 s of that is disk reading. Runs after that start within a few seconds.
 - **`ExpiredToken` / `RequestExpired` from `aws`.** The keys have expired; see step 0.

@@ -1,6 +1,6 @@
-// "New inspection" view: API key, video, PPE items, interval, run.
+// "New inspection" view: video, PPE items, interval, run. The API key lives in Developer options.
 
-import { api } from "../api.js";
+import { api, apiKey } from "../api.js";
 import { fmt, h, icons } from "../ui.js";
 
 const INTERVALS = [0.5, 1, 2, 5];
@@ -12,33 +12,13 @@ export async function renderNewRun(root, { onCreated }) {
   let previewFailed = false; // browser can't decode the file; the server still can
 
   // ---- API key ----
-  // An entered key always uses Moondream Cloud; without one, the server's Moondream (here, its GPU).
-  const localMoondream = config.server_key_configured && config.server_moondream_local;
-  const keyInput = h("input", { id: "api-key", class: "input", type: "password", autocomplete: "off",
-    placeholder: localMoondream ? "Leave empty to use this server's GPU"
-      : config.server_key_configured ? "Leave empty to use the server key" : "Paste your Moondream API key" });
-  const keyStatus = h("div", { class: "key-status", "aria-live": "polite" });
-  const showBtn = h("button", { type: "button", class: "btn", onclick: () => {
-    keyInput.type = keyInput.type === "password" ? "text" : "password";
-    showBtn.textContent = keyInput.type === "password" ? "Show" : "Hide";
-  } }, "Show");
-  const testBtn = h("button", { type: "button", class: "btn", onclick: async () => {
-    testBtn.disabled = true;
-    keyStatus.className = "key-status";
-    keyStatus.textContent = "Checking with Moondream…";
-    try {
-      const r = await api.checkKey(keyInput.value.trim());
-      keyStatus.className = `key-status ${r.ok ? "ok" : "bad"}`;
-      keyStatus.textContent = !r.ok ? r.message
-        : r.source === "form" ? `${r.message} Runs will use Moondream Cloud with the entered key.`
-        : localMoondream ? r.message : `${r.message} Using the server's key.`;
-    } catch (e) {
-      keyStatus.className = "key-status bad";
-      keyStatus.textContent = e.message;
-    } finally {
-      testBtn.disabled = false;
-    }
-  } }, "Test key");
+  // Set in Developer options; without one the server's own key (or model) is used.
+  const enteredKey = apiKey.get();
+  const keyNote = enteredKey ? h("div", { class: "dev-note" }, "Using the API key entered in ",
+      h("a", { href: "#dev" }, "Developer options"), " for this browser tab.")
+    : config.server_key_configured ? null
+    : h("div", { class: "dev-note" }, "This server has no API key. Add one in ",
+      h("a", { href: "#dev" }, "Developer options"), " before running an inspection.");
 
   // ---- video ----
   const fileInput = h("input", { id: "video", type: "file", accept: "video/*", "aria-label": "Choose a video" });
@@ -116,7 +96,7 @@ export async function renderNewRun(root, { onCreated }) {
     const calls = frames * (1 + 4 * items);
     estimate.replaceChildren(
       h("span", {}, h("b", { class: "num" }, frames), ` frames will be checked over ${fmt.time(span)}.`),
-      h("span", {}, `About ${calls.toLocaleString()} Moondream calls if ~4 workers are on screen.`));
+      h("span", {}, `About ${calls.toLocaleString()} model calls if ~4 workers are on screen.`));
   }
   updateEstimate();
 
@@ -137,21 +117,12 @@ export async function renderNewRun(root, { onCreated }) {
         drop, fileLine),
       h("section", { class: "card card-pad" },
         h("div", { class: "field" },
-          h("label", { class: "label", for: "api-key" }, "Moondream API key"),
-          h("div", { class: "input-row" }, keyInput, showBtn, testBtn),
-          h("div", { class: "hint" }, localMoondream
-            ? "Optional. If empty, Moondream runs on this server's GPU. With a key, the run uses Moondream Cloud. The key is never saved."
-            : config.server_key_configured
-            ? "Optional. If empty, the key in the server's .env is used. The key is never saved."
-            : "Required: the server has no key in its .env. The key is used for this run only and never saved."),
-          keyStatus),
-        h("div", { class: "field" },
           h("span", { class: "label" }, "Required PPE"),
           checks),
         h("div", { class: "field" },
           h("span", { class: "label" }, "Check one frame every"),
           seg,
-          h("span", { class: "hint" }, "Shorter intervals catch more but cost more API calls.")),
+          h("span", { class: "hint" }, "Shorter intervals catch more but take longer.")),
         h("div", { class: "field" },
           h("label", { class: "label", for: "max-seconds" }, "Only the first … seconds"),
           maxSec),
@@ -161,6 +132,7 @@ export async function renderNewRun(root, { onCreated }) {
         dev.changes.length ? h("div", { class: "field" }, h("div", { class: "dev-note" },
           `Developer settings: ${dev.changes.length} change${dev.changes.length === 1 ? "" : "s"} from the defaults will be used. `,
           h("a", { href: "#dev" }, "Review"))) : null,
+        keyNote ? h("div", { class: "field" }, keyNote) : null,
         h("div", { class: "field" }, estimate),
         h("div", { class: "submit-row" }, runBtn, uploadBar),
         formError)));
@@ -171,24 +143,23 @@ export async function renderNewRun(root, { onCreated }) {
     const items = selectedItems();
     if (!file) return (formError.textContent = "Choose a video first.");
     if (!items.length) return (formError.textContent = "Select at least one PPE item.");
-    if (!keyInput.value.trim() && !config.server_key_configured)
-      return (formError.textContent = "Enter a Moondream API key.");
+    if (!enteredKey && !config.server_key_configured)
+      return (formError.textContent = "Add an API key in Developer options first.");
 
     const body = new FormData();
     body.append("video", file);
-    if (keyInput.value.trim()) body.append("api_key", keyInput.value.trim());
+    if (enteredKey) body.append("api_key", enteredKey);
     body.append("required_ppe", items.join(","));
     body.append("analysis_interval_sec", String(interval()));
     if (Number(maxSec.value) > 0) body.append("max_seconds", String(Number(maxSec.value)));
     body.append("live", String(liveBox.checked));
 
     runBtn.disabled = true;
-    runBtn.textContent = !keyInput.value.trim() && localMoondream ? "Uploading…" : "Uploading and checking key…";
+    runBtn.textContent = "Uploading…";
     uploadBar.hidden = false;
     const fill = uploadBar.querySelector("i");
     try {
       const run = await api.createRun(body, (f) => (fill.style.width = `${Math.round(f * 100)}%`));
-      keyInput.value = "";
       onCreated(run.meta.id);
     } catch (err) {
       formError.textContent = err.message;

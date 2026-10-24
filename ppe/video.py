@@ -9,6 +9,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -166,6 +167,7 @@ def process_video(
     people_factory: Callable[[float], object] | None = None,
     on_frame: Callable[[int, "cv2.typing.MatLike"], None] | None = None,
     on_check: Callable[[int, int], None] | None = None,
+    on_start: Callable[[int, int], None] | None = None,
     live: bool = False,
     max_label_delay_sec: float = LABEL_DELAY_SEC,
 ) -> dict:
@@ -184,6 +186,8 @@ def process_video(
     with the raw check results and the voted boxes drawn in the video.
     on_frame(frame_index, annotated_bgr) is called for every frame written (for live previews).
     on_check(frame_index, workers) is called when the number of workers being checked changes.
+    on_start(width, height) is called once with the size frames are processed at; worker boxes
+    are in these pixels (smaller than the video's own size when live mode scales it down).
     on_progress and on_frame are called from the writer thread, the others from the caller's.
 
     Decoding, tracking and drawing + encoding run on their own threads. Tracking doesn't
@@ -204,6 +208,8 @@ def process_video(
     # In live mode 4K is too slow to decode, draw and encode at the video's speed; 1080p is plenty.
     reader = FrameReader(input_path, max_height=LIVE_MAX_HEIGHT if live else None)
     fps, width, height, total = reader.fps, reader.width, reader.height, reader.frame_count
+    if on_start:
+        on_start(width, height)
     if max_seconds:
         total = min(total, int(max_seconds * fps)) if total > 0 else int(max_seconds * fps)
 
@@ -292,7 +298,7 @@ def process_video(
                 counts["failed_in_a_row"] += 1
                 log.warning("PPE check failed at frame %d (%s)", idx, last_error)
                 if counts["failed_in_a_row"] >= tun.max_failed_checks:
-                    raise RuntimeError(f"Moondream failed on {counts['failed_in_a_row']} checks in a row, so the "
+                    raise RuntimeError(f"The PPE check failed on {counts['failed_in_a_row']} checks in a row, so the "
                                        f"run was stopped. Last error: {last_error}")
             else:
                 counts["failed_in_a_row"] = 0
@@ -314,6 +320,8 @@ def process_video(
                 "frame": idx,
                 "time_sec": round(idx / fps, 2),
                 "arrival": arrival,
+                # Wall-clock time the check's results were recorded: when each violation was detected.
+                "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "workers": [_worker_entry(r, statuses.get(r.track_id)) for r in current],
             }
             timeline.append(entry)

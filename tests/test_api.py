@@ -258,3 +258,22 @@ def test_live_stream_waits_for_the_browser(client, tmp_path):
             ws.send_text("ok")
         with pytest.raises(WebSocketDisconnect):
             ws.receive_bytes()
+
+
+def test_violation_frames_have_a_copy_without_boxes(client, tmp_path):
+    run_id = _upload(client, tmp_path, required_ppe="helmet").json()["meta"]["id"]
+    [inc] = _wait(client, run_id)["summary"]["events"]
+    clean = tmp_path / "runs" / run_id / "frames" / inc["clean_image"]
+
+    def red_pixels(r):
+        img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
+        return int(((img[:, :, 2] > 150) & (img[:, :, 1] < 90) & (img[:, :, 0] < 90)).sum())
+
+    framed = client.get(f"/api/runs/{run_id}/frames/{inc['frame_image']}")
+    assert red_pixels(framed) > 100  # the violation box is drawn on the annotated frame
+    assert clean.exists() and red_pixels(client.get(f"/api/runs/{run_id}/frames/{clean.name}")) == 0
+
+    clean.unlink()  # a run made before the copy was saved: it's made from the input video
+    r = client.get(f"/api/runs/{run_id}/frames/{clean.name}")
+    assert r.status_code == 200 and red_pixels(r) == 0 and clean.exists()
+    assert client.get(f"/api/runs/{run_id}/frames/999999_clean.jpg").status_code == 404  # not a violation frame

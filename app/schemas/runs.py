@@ -65,6 +65,10 @@ class RunMeta(BaseModel):
     rerun_of: str | None = None  # id of the run whose video this run re-inspected
     options: RunOptions
     video: VideoInfo
+    # [width, height] the video was processed at; worker boxes are in these pixels. Smaller than
+    # `video` when live mode scales tall video down. None until processing starts (older runs:
+    # filled in from the report).
+    frame_size: list[int] | None = None
     progress: Progress = Field(default_factory=Progress)
 
 
@@ -96,6 +100,11 @@ class ViolationEvent(BaseModel):
     track_id: int | None = None  # person id; None for runs made before tracking existed
     snapshot: str | None  # crop of the worker, file name under /snapshots/
     frame_image: str | None = None  # whole annotated frame, file name under /frames/
+    clean_image: str | None = None  # the same frame without boxes, under /frames/ (None: older runs)
+    detected_at: datetime | None = None  # wall-clock time of the incident's first check (None: older runs)
+    # True: a later check of the person had the items (PPE put back on). False: still missing at
+    # their last check. None: runs made before tracking.
+    resolved: bool | None = None
 
 
 class PersonSummary(BaseModel):

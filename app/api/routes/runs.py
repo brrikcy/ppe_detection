@@ -25,8 +25,8 @@ from ...services.keys import (
 )
 from ...services.run_store import RunNotFound, RunStore
 from ...services.runner import RunRunner
-from ...services.summary import build_person_detail, build_summary
-from ...services.media import VideoConverter
+from ...services.summary import CLEAN_SUFFIX, build_person_detail, build_summary
+from ...services.media import VideoConverter, extract_frame, warm_frames
 from ...services.dev_settings import DevSettingsStore
 from ..deps import get_dev_settings, get_key_verifier, get_runner, get_settings, get_store, get_video_converter
 
@@ -168,7 +168,7 @@ async def _check_key(verify: KeyVerifier, key: str, key_source: KeySource, endpo
         await run_in_threadpool(verify, key, endpoint)
     except KeyRejected as exc:
         hint = " It came from the server's .env." if key_source == KeySource.server else ""
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"{exc}{hint} Fix the key and try again.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"{exc}{hint} Fix the key in Developer options and try again.")
     except ModelRejected as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
     except MoondreamUnreachable as exc:
@@ -232,11 +232,26 @@ def get_run(run_id: str, store: Store, runner: Runner,
     if meta.status == RunStatus.completed:
         converter.warm(paths.output, audio_source=paths.input(), max_seconds=meta.options.max_seconds)
     timeline = _timeline(store, runner, meta)
+    if meta.frame_size is None and meta.status == RunStatus.completed:
+        report = store.read_report(meta.id) or {}  # runs made before it was stored
+        if report.get("width") and report.get("height"):
+            meta = meta.model_copy(update={"frame_size": [report["width"], report["height"]]})
     tun = meta.options.tuning
     summary = (build_summary(timeline, _image_names(paths.snapshots), _image_names(paths.frames),
                              _image_names(paths.people), tun.vote_window, tun.confirm_checks)
                if timeline is not None else None)
+    if summary and meta.status == RunStatus.completed:
+        _warm_clean_frames(paths, meta, summary.events)
     return RunDetail(meta=meta, progress_fraction=_progress_fraction(meta), summary=summary)
+
+
+def _warm_clean_frames(paths, meta: RunMeta, events) -> None:
+    """Older runs: start making their box-free violation frames, so the viewer opens them at once."""
+    src = paths.input()
+    if src is None:
+        return
+    warm_frames([(src, int(e.clean_image.removesuffix(CLEAN_SUFFIX)), meta.video.fps, paths.frames / e.clean_image)
+                 for e in events if e.clean_image and e.frame_image and not (paths.frames / e.clean_image).exists()])
 
 
 def _timeline(store: RunStore, runner: RunRunner, meta: RunMeta) -> list[dict] | None:
@@ -348,7 +363,23 @@ def get_snapshot(run_id: str, name: str, store: Store) -> FileResponse:
 
 @router.get("/{run_id}/frames/{name}")
 def get_frame(run_id: str, name: str, store: Store) -> FileResponse:
+    if name.endswith(CLEAN_SUFFIX):
+        _ensure_clean_frame(store, run_id, name)
     return _image(store, run_id, "frames", name)
+
+
+def _ensure_clean_frame(store: RunStore, run_id: str, name: str) -> None:
+    """Runs made before box-free frames were saved: make one from the input video, for frames
+    that have an annotated copy (i.e. that had a violation)."""
+    meta = _get_meta(store, run_id)
+    paths = store.paths(run_id)
+    dest = paths.frames / name
+    index = name.removesuffix(CLEAN_SUFFIX)
+    if dest.exists() or Path(name).name != name or not index.isdigit() or not (paths.frames / f"{index}.jpg").exists():
+        return
+    src = paths.input()
+    if src is not None and meta.status == RunStatus.completed:
+        extract_frame(src, int(index), meta.video.fps, dest)
 
 
 @router.get("/{run_id}/people/{name}")

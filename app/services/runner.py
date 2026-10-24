@@ -25,7 +25,7 @@ from ppe.video import process_video
 
 from ..schemas.runs import Progress, RunStatus
 from .run_store import RunStore, replace_with_retry
-from .summary import frame_name, person_photo_name, snapshot_name
+from .summary import clean_frame_name, frame_name, person_photo_name, snapshot_name
 
 log = logging.getLogger(__name__)
 
@@ -207,15 +207,16 @@ class RunRunner:
         try:
             process_video(paths.input(), paths.output, analyzer, max_seconds=opts.max_seconds,
                           on_progress=on_progress, on_analysed=on_analysed,
+                          on_start=lambda w, h: self.store.update(run_id, frame_size=[w, h]),
                           people_factory=self.people_factory, on_frame=on_frame, on_check=on_check,
                           live=opts.live)
             progress.frames_done = progress.frames_total = max(progress.frames_done, 1)
             self.store.update(run_id, status=RunStatus.completed, progress=progress,
                               finished_at=datetime.now(timezone.utc))
         except AuthError:
-            self._fail(run_id, "Moondream rejected the API key. Check it and start a new run.")
+            self._fail(run_id, "The API key was rejected. Update it in Developer options and start a new run.")
         except ModelError:
-            self._fail(run_id, f"The Moondream endpoint doesn't accept model {opts.tuning.moondream_model!r}. "
+            self._fail(run_id, f"The vision model endpoint doesn't accept model {opts.tuning.moondream_model!r}. "
                                "Change it in Developer options and start a new run.")
         except Exception as exc:
             log.exception("Run %s failed", run_id)
@@ -233,14 +234,19 @@ class RunRunner:
 
     @staticmethod
     def _save_preview(path, frame, results, violation_copy=None, keep_copy=False, update_preview=True) -> None:
-        """Latest annotated frame for the live view; also kept under frames/ when `keep_copy`."""
+        """Latest annotated frame for the live view; also kept under frames/ when `keep_copy`,
+        together with the frame without boxes, so the viewer can draw just one worker's box."""
         img = draw_results(frame.copy(), results)
         h, w = img.shape[:2]
-        if w > PREVIEW_MAX_WIDTH:
-            img = cv2.resize(img, (PREVIEW_MAX_WIDTH, int(h * PREVIEW_MAX_WIDTH / w)))
+        size = (PREVIEW_MAX_WIDTH, int(h * PREVIEW_MAX_WIDTH / w)) if w > PREVIEW_MAX_WIDTH else None
+        if size:
+            img = cv2.resize(img, size)
         if violation_copy is not None and keep_copy:
             violation_copy.parent.mkdir(exist_ok=True)
             cv2.imwrite(str(violation_copy), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            clean = cv2.resize(frame, size, interpolation=cv2.INTER_AREA) if size else frame
+            cv2.imwrite(str(violation_copy.with_name(clean_frame_name(violation_copy.name))), clean,
+                        [cv2.IMWRITE_JPEG_QUALITY, 85])
         if update_preview:
             RunRunner._write_preview(path, img)
 

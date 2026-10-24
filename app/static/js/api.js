@@ -39,6 +39,20 @@ async function request(path, options = {}) {
   return res.status === 204 ? null : res.json();
 }
 
+// The API key entered in Developer options. Kept for this browser tab only (sessionStorage),
+// never on the server; empty means the server's own key or model.
+const KEY_STORE = "ppe.apiKey";
+export const apiKey = {
+  get() {
+    try { return sessionStorage.getItem(KEY_STORE) ?? ""; } catch { return memoryKey; }
+  },
+  set(value) {
+    memoryKey = value.trim();
+    try { memoryKey ? sessionStorage.setItem(KEY_STORE, memoryKey) : sessionStorage.removeItem(KEY_STORE); } catch { /* memory only */ }
+  },
+};
+let memoryKey = "";
+
 export const api = {
   config: () => request("/api/config"),
   listRuns: () => request("/api/runs"),

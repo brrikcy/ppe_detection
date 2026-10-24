@@ -30,6 +30,11 @@ def frame_name(frame: int) -> str:
     return f"{frame:06d}.jpg"
 
 
+def clean_frame_name(frame_image: str) -> str:
+    """The same frame without boxes, saved next to the annotated one (runs made from now on)."""
+    return frame_image.removesuffix(".jpg") + "_clean.jpg"
+
+
 def person_photo_name(track_id: int) -> str:
     return f"{track_id}.jpg"
 
@@ -93,6 +98,10 @@ def _incidents(timeline: list[dict], available_snapshots, available_frames) -> l
         name = frame_name(entry["frame"])
         return name if available_frames is None or name in available_frames else None
 
+    def clean_image(entry):
+        name = clean_frame_name(frame_name(entry["frame"]))
+        return name if available_frames is not None and name in available_frames else None
+
     events: list[ViolationEvent] = []
     open_by_person: dict[int, dict] = {}
 
@@ -105,7 +114,8 @@ def _incidents(timeline: list[dict], available_snapshots, available_frames) -> l
             time_sec=inc["start"], end_sec=inc["end"], checks=inc["checks"], frame=best[0]["frame"],
             track_id=tid, violations=inc["labels"], box=list(best[1]["box"]),
             snapshot=snap(best[0], best[2]) if best[1]["violations"] else None,
-            frame_image=frame_image(best[0]), detected_at=inc["detected_at"], resolved=resolved))
+            frame_image=frame_image(best[0]), clean_image=clean_image(best[0]),
+            detected_at=inc["detected_at"], resolved=resolved))
 
     for entry in timeline:
         for i, w in enumerate(entry["workers"]):

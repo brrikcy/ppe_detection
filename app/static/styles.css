@@ -270,22 +270,26 @@ img, video { max-width: 100%; display: block; }
 
 /* ---------- lightbox (deliberately dark in both themes) ---------- */
 .lb-open-body { overflow: hidden; }
-.lightbox { position: fixed; inset: 0; z-index: 100; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: #0b0d0b; color: #eef0ec; }
+.lightbox { position: fixed; inset: 0; z-index: 100; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: #0b0d0b; color: #eef0ec; }
 .lb-top, .lb-bottom { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 14px clamp(16px, 3vw, 28px); }
-.lb-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
-.lb-counter { font: 700 22px var(--display); }
-.lb-time { font: 500 13px var(--mono); color: #b9c1b5; }
+.lb-top { padding-bottom: 8px; }
+.lb-counter { font: 500 13px var(--mono); color: #b9c1b5; }
+/* Under the image: ‹ violation, person and time › */
+.lb-navbar { display: flex; align-items: center; justify-content: center; gap: clamp(12px, 3vw, 28px); padding: 14px clamp(16px, 3vw, 28px) 0; }
+.lb-caption { display: grid; justify-items: center; gap: 4px; min-width: min(420px, 56vw); max-width: 70vw; text-align: center; }
+.lb-violation { font: 700 28px/1.1 var(--display); letter-spacing: .02em; color: #ff8a80; }
+.lb-violation.is-warn { color: #f3c56b; }
+.lb-violation.is-ok { color: #7fe08f; }
+.lb-sub { font: 500 13px var(--mono); color: #b9c1b5; }
 .lightbox .tag-bad { background: #4a1f1d; color: #ff9c94; }
 .lb-close, .lb-nav { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; border: 1px solid rgb(255 255 255 / .2); background: rgb(255 255 255 / .06); color: #fff; cursor: pointer; }
 .lb-close:hover, .lb-nav:hover:not(:disabled) { background: rgb(255 255 255 / .16); }
 .lb-close svg, .lb-nav svg { width: 22px; height: 22px; }
 .lb-nav:disabled { opacity: .25; cursor: default; }
-.lb-stage { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 0 clamp(8px, 2vw, 24px); min-height: 0; }
-.lb-img { grid-column: 2; justify-self: center; max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; box-shadow: 0 8px 40px rgb(0 0 0 / .5); }
+.lb-stage { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; padding: 0 clamp(8px, 2vw, 24px); min-height: 0; }
+.lb-img { grid-column: 1; justify-self: center; max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; box-shadow: 0 8px 40px rgb(0 0 0 / .5); }
 .lb-img.is-crop { min-height: min(60vh, 520px); image-rendering: auto; }
-.lb-empty { grid-column: 2; justify-self: center; color: #b9c1b5; }
-.lb-prev { grid-column: 1; }
-.lb-next { grid-column: 3; }
+.lb-empty { grid-column: 1; justify-self: center; color: #b9c1b5; }
 .lb-seg { border-color: rgb(255 255 255 / .25); }
 .lb-seg button { min-width: 96px; height: 36px; padding: 0 12px; border: 0; border-left: 1px solid rgb(255 255 255 / .18); background: transparent; color: #eef0ec; font: 500 13px var(--body); cursor: pointer; }
 .lb-seg button:first-child { border-left: 0; }
@@ -295,16 +299,13 @@ img, video { max-width: 100%; display: block; }
 .lightbox .btn:not(.btn-primary) { background: transparent; color: #eef0ec; border-color: rgb(255 255 255 / .3); }
 .lb-keys { font: 12px var(--mono); color: #8f998b; }
 @media (max-width: 760px) {
-  .lb-stage { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
-  .lb-img, .lb-empty { grid-column: 1; grid-row: 1; }
-  .lb-prev, .lb-next { grid-row: 2; grid-column: 1; }
-  .lb-prev { justify-self: start; } .lb-next { justify-self: end; }
   .lb-keys { display: none; }
+  .lb-caption { min-width: 0; }
+  .lb-violation { font-size: 22px; }
 }
 
 .tag-ok { display: inline-block; padding: 1px 7px; border-radius: 4px; background: var(--good-soft); color: var(--good); font-size: 12px; font-weight: 600; }
 .lightbox .tag-ok { background: #1b3320; color: #7fe08f; }
-.lb-person { font: 700 22px var(--display); color: var(--accent); }
 .player-msg { pointer-events: none; }
 .warn-banner { padding: 12px 16px; border-radius: var(--r); background: var(--warning-soft); color: var(--warning); font-size: 13.5px; border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent); }
 .warn-banner b { font-weight: 700; }
@@ -598,6 +599,13 @@ th.is-sorted .det-sort-btn, th.is-sorted .det-sort-icon { color: var(--fg); }
 /* Lightbox spotlight: everything but the selected worker's box is dimmed. */
 /* A definite row height, so a tall (portrait) frame is scaled to fit instead of overflowing. */
 .lb-stage { position: relative; grid-template-rows: minmax(0, 1fr); }
-.lb-spot { position: absolute; pointer-events: none; border-radius: 4px; background: rgb(0 0 0 / .62); clip-path: var(--cutout); }
+.lb-spot { position: absolute; pointer-events: none; }
+.lb-dim { position: absolute; inset: 0; border-radius: 4px; background: rgb(0 0 0 / .62); }
 .lb-hole { position: absolute; outline: 3px solid var(--accent); outline-offset: 2px; transition: all .2s ease; }
+/* On the clean frame the box is the only annotation: drawn like the video's violation box. */
+.lb-spot.is-solo .lb-dim { background: rgb(0 0 0 / .35); }
+.lb-spot.is-solo .lb-hole { outline: 3px solid #e5484d; outline-offset: 0; }
+.lb-box-label { position: absolute; left: -3px; bottom: calc(100% + 3px); padding: 3px 9px; border-radius: 3px; background: #d03b3b; color: #fff; font: 700 15px/1.2 var(--body); white-space: nowrap; box-shadow: 0 2px 8px rgb(0 0 0 / .4); }
+.lb-hole[data-label="below"] .lb-box-label { top: calc(100% + 3px); bottom: auto; }
+.lb-hole[data-label="inside"] .lb-box-label { top: 3px; left: 3px; bottom: auto; }
 @media (prefers-reduced-motion: reduce) { .lb-hole { transition: none; } .det-outcome.is-live::before { animation: none; } }

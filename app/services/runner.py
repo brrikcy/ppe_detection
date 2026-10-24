@@ -24,7 +24,7 @@ from ppe.video import process_video
 
 from ..schemas.runs import Progress, RunStatus
 from .run_store import RunStore, replace_with_retry
-from .summary import frame_name, person_photo_name, snapshot_name
+from .summary import clean_frame_name, frame_name, person_photo_name, snapshot_name
 
 log = logging.getLogger(__name__)
 
@@ -228,14 +228,19 @@ class RunRunner:
 
     @staticmethod
     def _save_preview(path, frame, results, violation_copy=None, keep_copy=False, update_preview=True) -> None:
-        """Latest annotated frame for the live view; also kept under frames/ when `keep_copy`."""
+        """Latest annotated frame for the live view; also kept under frames/ when `keep_copy`,
+        together with the frame without boxes, so the viewer can draw just one worker's box."""
         img = draw_results(frame.copy(), results)
         h, w = img.shape[:2]
-        if w > PREVIEW_MAX_WIDTH:
-            img = cv2.resize(img, (PREVIEW_MAX_WIDTH, int(h * PREVIEW_MAX_WIDTH / w)))
+        size = (PREVIEW_MAX_WIDTH, int(h * PREVIEW_MAX_WIDTH / w)) if w > PREVIEW_MAX_WIDTH else None
+        if size:
+            img = cv2.resize(img, size)
         if violation_copy is not None and keep_copy:
             violation_copy.parent.mkdir(exist_ok=True)
             cv2.imwrite(str(violation_copy), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            clean = cv2.resize(frame, size, interpolation=cv2.INTER_AREA) if size else frame
+            cv2.imwrite(str(violation_copy.with_name(clean_frame_name(violation_copy.name))), clean,
+                        [cv2.IMWRITE_JPEG_QUALITY, 85])
         if update_preview:
             RunRunner._write_preview(path, img)
 

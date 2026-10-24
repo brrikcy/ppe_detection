@@ -35,7 +35,8 @@ export function eventItems(run, events) {
     ...e,
     cropUrl: e.snapshot ? api.urls.snapshot(run.meta.id, e.snapshot) : null,
     frameUrl: e.frame_image ? api.urls.frame(run.meta.id, e.frame_image) : null,
-    frameSize, // the lightbox spotlights the box on the full frame
+    cleanUrl: e.clean_image ? api.urls.frame(run.meta.id, e.clean_image) : null,
+    frameSize, // the lightbox draws just this box on the clean frame
   }));
 }
 

@@ -4,8 +4,9 @@ import { api, apiKey, ServerUnreachable } from "../api.js";
 import { timelineChart } from "../charts.js";
 import { fmt, h, icons, plural, statusPill } from "../ui.js";
 import { createDetections } from "./detections.js";
+import { createLiveWindow } from "./liveWindow.js";
 
-const POLL_MS = 1000;
+const POLL_MS = 600; // while a run is processing; the live window should feel immediate
 
 let tuningDefaults = null; // developer-settings defaults, to mark runs made with custom settings
 
@@ -44,7 +45,11 @@ export async function renderRun(root, runId, { onChanged, onDeleted }) {
   }
 
   await tick();
-  return () => { disposed = true; clearTimeout(timer); };
+  return () => {
+    disposed = true;
+    clearTimeout(timer);
+    root.querySelector("[data-view=results]")?.dispose?.(); // closes the live window
+  };
 }
 
 // ---------------------------------------------------------------- shared bits
@@ -342,7 +347,8 @@ function buildResults(run, { onDeleted }) {
   let video = null;
   let chart = null;
   let chartPoints = [];
-  let settling = false; // completed while watching: showing 100% before the video appears
+  let settling = false;
+  let live = null; // the live inspection window, while the run is processing // completed while watching: showing 100% before the video appears
   let lastStatus = null, lastFrames = -1, lastChart = null, lastTypes = null;
   const stream = { on: false, failed: false };
   const started = { t: performance.now(), f: run.progress_fraction };
@@ -377,6 +383,8 @@ function buildResults(run, { onDeleted }) {
     const m = run.meta;
     const s = run.summary;
     const done = m.status === "completed";
+    // A run that is still processing opens the live window; it closes itself when the run completes.
+    if (!done && !live) live = createLiveWindow(run);
     if (m.status !== lastStatus) {
       headSlot.replaceChildren(header(run, done ? [
         h("a", { class: "btn", href: api.urls.video(id, true), download: "" }, h("span", { html: icons.download, style: "display:inline-flex" }), "Video"),
@@ -392,7 +400,8 @@ function buildResults(run, { onDeleted }) {
     const queued = m.status === "queued";
     if (done) {
       // Watched to the end: fill the bar to 100% and hold it a moment before settling.
-      const watched = lastFrames >= 0 && !video && !settling;
+      // (Not while the live window covers the page: it shows the 100% itself.)
+      const watched = lastFrames >= 0 && !video && !settling && !live?.open;
       const settle = () => {
         if (!video) showVideo();
         progress.hidden = true;
@@ -423,7 +432,8 @@ function buildResults(run, { onDeleted }) {
         : gained > 0.03 && secs > 4 ? `About ${fmt.duration((secs / gained) * (1 - frac))} left` : "Estimating time left…";
       // The live view plays along with the inspection: a live run streams every frame (MJPEG),
       // others refresh a still as frames are written. If the stream drops, refresh the still.
-      if (m.progress.frames_done !== lastFrames && m.progress.frames_done > 0) {
+      // While the live window is open it has the stream; the page behind doesn't need one.
+      if (!live?.open && m.progress.frames_done !== lastFrames && m.progress.frames_done > 0) {
         lastFrames = m.progress.frames_done;
         if (m.options.live && m.status === "running" && !stream.failed) {
           if (!stream.on) {
@@ -503,7 +513,9 @@ function buildResults(run, { onDeleted }) {
 
     chartPoints = s?.timeline ?? [];
     drawChart();
+    live?.update(run);
   };
+  page.dispose = () => live?.dispose();
 
   // The chart is redrawn as checks come in, and once more with seeking when the video is there.
   function drawChart() {

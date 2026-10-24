@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import Annotated
 
 import cv2
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 
 from ppe.config import parse_required
 
@@ -34,6 +34,7 @@ router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 ALLOWED_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
 CHUNK = 1024 * 1024
+STREAM_WINDOW = 4  # live frames sent but not yet answered; at most ~16 fps at a 0.25 s round trip
 
 Store = Annotated[RunStore, Depends(get_store)]
 Runner = Annotated[RunRunner, Depends(get_runner)]
@@ -302,20 +303,35 @@ def get_preview(run_id: str, store: Store) -> FileResponse:
     return _file(store.paths(run_id).preview, "image/jpeg")
 
 
-@router.get("/{run_id}/live")
-def get_live(run_id: str, store: Store, runner: Runner) -> StreamingResponse:
-    """The annotated video as it's written, as an MJPEG stream (plays in an <img>); ends with the run."""
-    _get_meta(store, run_id)
+@router.websocket("/{run_id}/live")
+async def live(ws: WebSocket, run_id: str, runner: Runner) -> None:
+    """The annotated video as it's written, one JPEG per binary message; closes when the run ends.
+
+    The browser answers each frame with a text message, and no more than STREAM_WINDOW frames go
+    unanswered. On a slow connection frames are skipped instead of queueing in network buffers,
+    where they made the picture fall seconds behind and arrive in bursts."""
     feed = runner.feed(run_id)
-    if feed is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "This run isn't running")
-
-    def parts():
-        for jpeg in feed.frames():
-            yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n%s\r\n" % (len(jpeg), jpeg)
-
-    return StreamingResponse(parts(), media_type="multipart/x-mixed-replace; boundary=frame",
-                             headers={"Cache-Control": "no-store"})
+    if feed is None:  # not running (or no such run)
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    await ws.accept()
+    seq = unanswered = 0
+    try:
+        with feed.watching():
+            while True:
+                while unanswered >= STREAM_WINDOW:
+                    await ws.receive_text()
+                    unanswered -= 1
+                frame = await run_in_threadpool(feed.next_frame, seq)
+                if frame is None:
+                    break
+                seq, jpeg = frame
+                if jpeg is not None:
+                    await ws.send_bytes(jpeg)
+                    unanswered += 1
+        await ws.close()
+    except WebSocketDisconnect:
+        pass
 
 
 def _image(store: RunStore, run_id: str, folder: str, name: str) -> FileResponse:

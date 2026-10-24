@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -35,7 +36,9 @@ PREVIEW_MAX_WIDTH = 1280
 SNAPSHOT_MAX_HEIGHT = 320
 PROGRESS_SAVE_INTERVAL_SEC = 0.5
 PREVIEW_INTERVAL_SEC = 0.4  # live preview refresh while frames are written
-STREAM_JPEG_QUALITY = 75
+# Live stream frames: ~70 KB each, so ~10 fps fits a 0.75 MB/s connection (207 KB at 1280 px, quality 75).
+STREAM_MAX_WIDTH = 800
+STREAM_JPEG_QUALITY = 60
 STREAM_POLL_SEC = 1.0  # a stream with no new frame checks this often whether the run has ended
 
 
@@ -44,7 +47,7 @@ def default_analyzer_factory(config: Config) -> PPEAnalyzer:
 
 
 class LiveFeed:
-    """The latest frame written by a running run, as JPEG, for the MJPEG stream.
+    """The latest frame written by a running run, as JPEG, for the live stream.
 
     Frames are only encoded while someone is watching.
     """
@@ -58,8 +61,8 @@ class LiveFeed:
 
     def push(self, img) -> None:
         h, w = img.shape[:2]
-        if w > PREVIEW_MAX_WIDTH:
-            img = cv2.resize(img, (PREVIEW_MAX_WIDTH, int(h * PREVIEW_MAX_WIDTH / w)))
+        if w > STREAM_MAX_WIDTH:
+            img = cv2.resize(img, (STREAM_MAX_WIDTH, int(h * STREAM_MAX_WIDTH / w)), interpolation=cv2.INTER_AREA)
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, STREAM_JPEG_QUALITY])
         if not ok:
             return
@@ -72,24 +75,27 @@ class LiveFeed:
             self._closed = True
             self._cond.notify_all()
 
-    def frames(self):
-        """Yields each new frame until the run ends."""
+    @contextmanager
+    def watching(self):
+        """Frames are encoded while at least one viewer is inside this block."""
         with self._cond:
             self.viewers += 1
         try:
-            seq = 0
-            while True:
-                with self._cond:
-                    self._cond.wait_for(lambda: self._seq != seq or self._closed, timeout=STREAM_POLL_SEC)
-                    if self._closed:
-                        return
-                    if self._seq == seq:
-                        continue
-                    seq, jpeg = self._seq, self._jpeg
-                yield jpeg
+            yield self
         finally:
             with self._cond:
                 self.viewers -= 1
+
+    def next_frame(self, seq: int) -> tuple[int, bytes | None] | None:
+        """The newest frame after number `seq`, as (number, jpeg), skipping any in between;
+        (seq, None) if none came within STREAM_POLL_SEC; None once the run has ended."""
+        with self._cond:
+            self._cond.wait_for(lambda: self._seq != seq or self._closed, timeout=STREAM_POLL_SEC)
+            if self._closed:
+                return None
+            if self._seq == seq:
+                return seq, None
+            return self._seq, self._jpeg
 
 
 class RunRunner:

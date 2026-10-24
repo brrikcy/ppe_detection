@@ -224,7 +224,7 @@ Every request names its model (`moondream3.1-9B-A2B` by default; change it in De
 
 Without live mode, every frame waits until its workers' PPE check is back from Moondream, so the video is exact but plays only as fast as Moondream answers. **Live mode** is for showing inspection as it happens:
 
-- The video plays at its own speed and streams to the run page (MJPEG, every frame). Boxes follow workers on every frame.
+- The video plays at its own speed and streams to the run page over a WebSocket. Boxes follow workers on every frame. The browser answers each frame, and the server sends a new one only while fewer than 4 are unanswered, so a slow connection gets fewer frames per second instead of a picture that falls behind.
 - A frame waits at most 1 second for its check. If Moondream is slower, the frame is shown with the statuses so far, and the new tag appears from the frame where the answer arrives. All checks are still in the report.
 - A check is skipped while two others are still with Moondream, so slow answers never pile up.
 - Video taller than 1080p (e.g. 4K) is processed and written at 1080p. 4K is too slow to decode, draw and encode at 30 fps.

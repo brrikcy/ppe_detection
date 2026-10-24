@@ -6,7 +6,9 @@ import cv2
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
+from app.api.routes.runs import STREAM_WINDOW
 from app.core.settings import Settings
 from app.main import create_app
 from app.services.keys import KeyRejected
@@ -216,7 +218,7 @@ def test_rerun_copies_the_video_and_chooses_the_settings(client, tmp_path):
     assert client.post("/api/runs/nope/rerun", json={}).status_code == 404
 
 
-def test_live_run_streams_frames(client, tmp_path):
+def _start_live_run(client, tmp_path) -> str:
     r = _upload(client, tmp_path, required_ppe="helmet", live="true")
     assert r.status_code == 201, r.text
     run_id = r.json()["meta"]["id"]
@@ -226,11 +228,33 @@ def test_live_run_streams_frames(client, tmp_path):
     while (m := client.get(f"/api/runs/{run_id}").json()["meta"])["progress"]["frames_done"] == 0:
         assert m["status"] != "completed" and time.time() < deadline  # 25 frames at 10 fps take 2.5 s
         time.sleep(0.05)
-    stream = client.get(f"/api/runs/{run_id}/live")  # ends with the run
-    assert stream.status_code == 200
-    assert stream.headers["content-type"].startswith("multipart/x-mixed-replace")
-    assert stream.content.count(b"--frame\r\nContent-Type: image/jpeg") > 3
-    assert b"\xff\xd8" in stream.content  # JPEG data
+    return run_id
+
+
+def test_live_run_streams_frames(client, tmp_path):
+    run_id = _start_live_run(client, tmp_path)
+    frames = []
+    with client.websocket_connect(f"/api/runs/{run_id}/live") as ws:  # closes with the run
+        with pytest.raises(WebSocketDisconnect):
+            while True:
+                frames.append(ws.receive_bytes())
+                ws.send_text("ok")
+    assert len(frames) > 3
+    assert all(f.startswith(b"\xff\xd8") for f in frames)  # JPEG data
 
     assert _wait(client, run_id)["meta"]["status"] == "completed"
-    assert client.get(f"/api/runs/{run_id}/live").status_code == 404  # finished: no stream
+    with pytest.raises(WebSocketDisconnect):  # finished: no stream
+        with client.websocket_connect(f"/api/runs/{run_id}/live"):
+            pass
+
+
+def test_live_stream_waits_for_the_browser(client, tmp_path):
+    # Unanswered frames stop the stream, so a slow connection skips frames instead of queueing them.
+    run_id = _start_live_run(client, tmp_path)
+    with client.websocket_connect(f"/api/runs/{run_id}/live") as ws:
+        frames = [ws.receive_bytes() for _ in range(STREAM_WINDOW)]
+        assert _wait(client, run_id)["meta"]["status"] == "completed"  # nothing more was sent meanwhile
+        for _ in frames:
+            ws.send_text("ok")
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_bytes()

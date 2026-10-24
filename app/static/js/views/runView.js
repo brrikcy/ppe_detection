@@ -201,6 +201,23 @@ function swapImage(img, url) {
   next.src = url;
 }
 
+// Shows a live run's frames in `img` as they arrive. Each frame is answered, and the server waits
+// for answers before sending more, so a slow connection skips frames instead of falling behind.
+// Stops when `img` leaves the page; `onFail` if the stream can't open or breaks off.
+function playLive(id, img, onFail) {
+  const ws = new WebSocket(api.urls.live(id));
+  ws.binaryType = "blob";
+  ws.onmessage = (e) => {
+    if (!img.isConnected) return ws.close();
+    ws.send("ok");
+    const prev = img.src;
+    img.src = URL.createObjectURL(e.data);
+    img.classList.add("is-loaded");
+    if (prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+  };
+  ws.onclose = (e) => { if (!e.wasClean && img.isConnected) onFail(); };
+}
+
 function bump(el, text) {
   if (el.textContent === text) return;
   el.textContent = text;
@@ -296,16 +313,14 @@ function buildLive(run) {
       : done > 0.03 && secs > 4 ? `About ${fmt.duration((secs / done) * (1 - frac))} left`
         : "Estimating time left…";
 
-    // The preview plays along with the inspection: a live run streams every frame (MJPEG),
+    // The preview plays along with the inspection: a live run streams its frames (WebSocket),
     // others refresh a still as frames are written. If the stream drops, refresh the still.
     if (m.progress.frames_done !== lastFrames && m.progress.frames_done > 0) {
       lastFrames = m.progress.frames_done;
       if (m.options.live && m.status === "running" && !stream.failed) {
         if (!stream.on) {
           stream.on = true;
-          previewImg.onerror = () => { stream.failed = true; previewImg.onerror = null; };
-          previewImg.src = api.urls.live(id);
-          previewImg.classList.add("is-loaded");
+          playLive(id, previewImg, () => { stream.failed = true; });
         }
       } else {
         swapImage(previewImg, api.urls.preview(id));

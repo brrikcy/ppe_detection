@@ -10,7 +10,7 @@ const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 let mode = "frame"; // remembered between openings
 
 /**
- * box and frameSize (optional): the worker's box in video pixels and the video's [width, height];
+ * box and frameSize (optional): the worker's box and the [width, height] of the frame it's measured in;
  * when given, the full frame dims everything but that worker, so the one violation stands out.
  * @param {{time_sec:number, violations:string[], notes?:string[], cropUrl:string|null, frameUrl:string|null,
  *          box?:number[], frameSize?:number[]}[]} items
@@ -23,8 +23,7 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
 
   const img = h("img", { class: "lb-img", alt: "" });
   const empty = h("div", { class: "lb-empty", hidden: true }, "No image saved for this view.");
-  const holeLabel = h("span");
-  const hole = h("div", { class: "lb-hole" }, holeLabel);
+  const hole = h("div", { class: "lb-hole" });
   const spot = h("div", { class: "lb-spot", hidden: true, "aria-hidden": "true" }, hole);
   let shownMode = mode;
   const counter = h("span", { class: "lb-counter num" });
@@ -108,12 +107,12 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
       width: `${img.offsetWidth}px`, height: `${img.offsetHeight}px` });
     const [fw, fh] = it.frameSize;
     const [x1, y1, x2, y2] = it.box;
-    const pad = 0.012; // a little room so the drawn box and its tag stay inside the light
-    const left = Math.max(0, x1 / fw - pad), top = Math.max(0, y1 / fh - pad);
-    Object.assign(hole.style, { left: `${left * 100}%`, top: `${top * 100}%`,
-      width: `${(Math.min(1, x2 / fw + pad) - left) * 100}%`, height: `${(Math.min(1, y2 / fh + pad) - top) * 100}%` });
-    hole.classList.toggle("label-below", top < 0.08);
-    holeLabel.textContent = [it.track_id != null ? `#${it.track_id}` : null, ...it.violations].filter(Boolean).join(" · ");
+    // Exactly the box drawn in the frame; the outline sits just outside it.
+    const [l, t, r, b] = [Math.max(0, x1 / fw), Math.max(0, y1 / fh), Math.min(1, x2 / fw), Math.min(1, y2 / fh)]
+      .map((v) => `${(v * 100).toFixed(3)}%`);
+    Object.assign(hole.style, { left: l, top: t, right: `calc(100% - ${r})`, bottom: `calc(100% - ${b})` });
+    // The dim layer covers the frame except the box: the outer rectangle minus the inner one.
+    spot.style.setProperty("--cutout", `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${l} ${t}, ${r} ${t}, ${r} ${b}, ${l} ${b}, ${l} ${t})`);
   }
   img.addEventListener("load", placeSpot);
   window.addEventListener("resize", placeSpot);

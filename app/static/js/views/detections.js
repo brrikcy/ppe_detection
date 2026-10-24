@@ -29,12 +29,13 @@ const SORTS = {
 };
 
 export function eventItems(run, events) {
-  const { width, height } = run.meta.video;
+  // Boxes are in the pixels the video was processed at, which live mode makes smaller than the video.
+  const frameSize = run.meta.frame_size ?? [run.meta.video.width, run.meta.video.height];
   return events.map((e) => ({
     ...e,
     cropUrl: e.snapshot ? api.urls.snapshot(run.meta.id, e.snapshot) : null,
     frameUrl: e.frame_image ? api.urls.frame(run.meta.id, e.frame_image) : null,
-    frameSize: [width, height], // the box is in video pixels; the lightbox spotlights it
+    frameSize, // the lightbox spotlights the box on the full frame
   }));
 }
 

@@ -201,6 +201,7 @@ class RunRunner:
         try:
             process_video(paths.input(), paths.output, analyzer, max_seconds=opts.max_seconds,
                           on_progress=on_progress, on_analysed=on_analysed,
+                          on_start=lambda w, h: self.store.update(run_id, frame_size=[w, h]),
                           people_factory=self.people_factory, on_frame=on_frame, on_check=on_check,
                           live=opts.live)
             progress.frames_done = progress.frames_total = max(progress.frames_done, 1)

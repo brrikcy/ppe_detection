@@ -374,3 +374,13 @@ def test_frame_reader_scales_tall_video_down(tmp_path, monkeypatch):
         assert all(f.shape == (100, 200, 3) for f in frames)
         assert frames[0][:, 100:].mean() > 150 > frames[0][:, :100].mean()  # right half still bright
     assert media.FrameReader(src, max_height=1080).height == 200  # never scaled up
+
+
+def test_on_start_reports_the_size_boxes_are_measured_in(tmp_path):
+    sizes = []
+    src = write_video(tmp_path / "in.mp4", frames=10)
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0, min_check_age_sec=0), model=FakeModel())
+    report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: FakePeople(),
+                           on_start=lambda w, h: sizes.append((w, h)))
+    a.close()
+    assert sizes == [(report["width"], report["height"])]

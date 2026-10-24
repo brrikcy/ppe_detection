@@ -65,6 +65,10 @@ class RunMeta(BaseModel):
     rerun_of: str | None = None  # id of the run whose video this run re-inspected
     options: RunOptions
     video: VideoInfo
+    # [width, height] the video was processed at; worker boxes are in these pixels. Smaller than
+    # `video` when live mode scales tall video down. None until processing starts (older runs:
+    # filled in from the report).
+    frame_size: list[int] | None = None
     progress: Progress = Field(default_factory=Progress)
 
 

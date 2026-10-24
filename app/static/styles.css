@@ -596,9 +596,8 @@ th.is-sorted .det-sort-btn, th.is-sorted .det-sort-icon { color: var(--fg); }
 .det-card .card-head h2 { display: flex; align-items: center; gap: 8px; }
 
 /* Lightbox spotlight: everything but the selected worker's box is dimmed. */
-.lb-stage { position: relative; }
-.lb-spot { position: absolute; overflow: hidden; pointer-events: none; border-radius: 4px; }
-.lb-hole { position: absolute; border: 3px solid var(--accent); border-radius: 3px; box-shadow: 0 0 0 9999px rgb(0 0 0 / .62); transition: all .2s ease; }
-.lb-hole span { position: absolute; left: -3px; bottom: 100%; margin-bottom: 4px; padding: 2px 8px; border-radius: 3px; background: var(--accent); color: var(--accent-ink); font: 600 12px var(--body); white-space: nowrap; }
-.lb-hole.label-below span { top: 100%; bottom: auto; margin: 4px 0 0; }
+/* A definite row height, so a tall (portrait) frame is scaled to fit instead of overflowing. */
+.lb-stage { position: relative; grid-template-rows: minmax(0, 1fr); }
+.lb-spot { position: absolute; pointer-events: none; border-radius: 4px; background: rgb(0 0 0 / .62); clip-path: var(--cutout); }
+.lb-hole { position: absolute; outline: 3px solid var(--accent); outline-offset: 2px; transition: all .2s ease; }
 @media (prefers-reduced-motion: reduce) { .lb-hole { transition: none; } .det-outcome.is-live::before { animation: none; } }

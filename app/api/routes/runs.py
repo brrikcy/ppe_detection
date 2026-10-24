@@ -231,6 +231,10 @@ def get_run(run_id: str, store: Store, runner: Runner,
     if meta.status == RunStatus.completed:
         converter.warm(paths.output, audio_source=paths.input(), max_seconds=meta.options.max_seconds)
     timeline = _timeline(store, runner, meta)
+    if meta.frame_size is None and meta.status == RunStatus.completed:
+        report = store.read_report(meta.id) or {}  # runs made before it was stored
+        if report.get("width") and report.get("height"):
+            meta = meta.model_copy(update={"frame_size": [report["width"], report["height"]]})
     tun = meta.options.tuning
     summary = (build_summary(timeline, _image_names(paths.snapshots), _image_names(paths.frames),
                              _image_names(paths.people), tun.vote_window, tun.confirm_checks)

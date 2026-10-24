@@ -167,6 +167,7 @@ def process_video(
     people_factory: Callable[[float], object] | None = None,
     on_frame: Callable[[int, "cv2.typing.MatLike"], None] | None = None,
     on_check: Callable[[int, int], None] | None = None,
+    on_start: Callable[[int, int], None] | None = None,
     live: bool = False,
     max_label_delay_sec: float = LABEL_DELAY_SEC,
 ) -> dict:
@@ -185,6 +186,8 @@ def process_video(
     with the raw check results and the voted boxes drawn in the video.
     on_frame(frame_index, annotated_bgr) is called for every frame written (for live previews).
     on_check(frame_index, workers) is called when the number of workers being checked changes.
+    on_start(width, height) is called once with the size frames are processed at; worker boxes
+    are in these pixels (smaller than the video's own size when live mode scales it down).
     on_progress and on_frame are called from the writer thread, the others from the caller's.
 
     Decoding, tracking and drawing + encoding run on their own threads. Tracking doesn't
@@ -205,6 +208,8 @@ def process_video(
     # In live mode 4K is too slow to decode, draw and encode at the video's speed; 1080p is plenty.
     reader = FrameReader(input_path, max_height=LIVE_MAX_HEIGHT if live else None)
     fps, width, height, total = reader.fps, reader.width, reader.height, reader.frame_count
+    if on_start:
+        on_start(width, height)
     if max_seconds:
         total = min(total, int(max_seconds * fps)) if total > 0 else int(max_seconds * fps)
 

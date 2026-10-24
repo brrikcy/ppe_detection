@@ -12,14 +12,6 @@ const PLAY = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><p
 const SORT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10l4-4 4 4M8 14l4 4 4-4"/></svg>`;
 const CLOSE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
 
-// resolved: true when a later check found the PPE back on, false when it was still missing at
-// the worker's last check (so far, while the run is processing), null for older runs.
-const OUTCOMES = {
-  open: { label: "Unresolved", live: "Ongoing", title: "Still missing at the worker's last check" },
-  fixed: { label: "Corrected", live: "Corrected", title: "A later check found the PPE back on" },
-};
-const outcomeOf = (e) => (e.resolved == null ? null : e.resolved ? "fixed" : "open");
-
 const SORTS = {
   time: { label: "Video time", key: (e) => e.time_sec },
   worker: { label: "Worker", key: (e) => e.track_id ?? -1 },
@@ -78,7 +70,7 @@ export function createDetections(run) {
   let video = null;
   let lastData = null;
   let seen = 0; // incidents already drawn once; later ones slide in
-  const state = { item: "", outcome: "", worker: "", from: null, to: null, sort: "time", dir: 1, view: savedView() };
+  const state = { item: "", worker: "", from: null, to: null, sort: "time", dir: 1, view: savedView() };
   const selected = new Set(); // incident numbers
   const showInVideo = (e) => video && seekTo(video, e.time_sec);
   let shown = [];
@@ -98,7 +90,6 @@ export function createDetections(run) {
     sel.el.value = options.some(([v]) => v === value) ? value : "";
   };
   const fItem = select("item", "Missing PPE");
-  const fOutcome = select("outcome", "Outcome");
   const fWorker = select("worker", "Worker");
   const timeInput = (key, placeholder) => {
     const el = h("input", { class: "input", inputmode: "decimal", placeholder, "aria-describedby": "det-time-hint",
@@ -127,7 +118,7 @@ export function createDetections(run) {
 
   const filters = h("div", { class: "det-filters" },
     h("div", { class: "det-row" },
-      fItem.field, fOutcome.field, fWorker.field,
+      fItem.field, fWorker.field,
       h("div", { class: "det-field det-range", role: "group", "aria-label": "Video time" },
         h("span", {}, "Video time from – to"),
         h("div", { class: "det-range-inputs" }, fFrom, h("span", { class: "pair-sep" }, "–"), fTo)),
@@ -152,7 +143,7 @@ export function createDetections(run) {
       draw();
     } }, label, h("span", { html: SORT, class: "det-sort-icon" })));
   const heads = [h("th", {}, "No."), sortHead("Missing PPE", "items"), sortHead("Worker", "worker"),
-    sortHead("Duration", "duration"), sortHead("Timestamp", "time"), h("th", {}, "Video"), h("th", {}, "Outcome")];
+    sortHead("Duration", "duration"), sortHead("Timestamp", "time"), h("th", {}, "Video")];
   const thead = h("thead", {}, h("tr", {}, h("th", { class: "det-sel" }, allBox), heads));
   const tbody = h("tbody");
   const table = h("table", { class: "det-table" }, thead, tbody);
@@ -186,25 +177,18 @@ export function createDetections(run) {
   const playBtn = (e) => h("button", { type: "button", class: "det-play", disabled: !video,
     title: video ? null : "Available when the inspection finishes", onclick: () => showInVideo(e) },
     h("span", { html: PLAY }), `Play at ${fmt.timePrecise(e.time_sec)}`);
-  const outcomePill = (e) => {
-    const o = outcomeOf(e);
-    return o ? h("span", { class: `det-outcome is-${o}${live && o === "open" ? " is-live" : ""}`, title: OUTCOMES[o].title },
-      live ? OUTCOMES[o].live : OUTCOMES[o].label) : h("span", { class: "hint" }, "–");
-  };
-  const dot = (e) => h("i", { class: `det-dot is-${outcomeOf(e) ?? "open"}`, "aria-hidden": "true" });
   const rowClass = (e) => [selected.has(e.no) ? "is-selected" : null, e.no > seen ? "is-new" : null].filter(Boolean).join(" ") || null;
 
   function listRow(e, i) {
     return h("tr", { class: rowClass(e) },
       h("td", { class: "det-sel" }, checkbox(e)),
-      h("td", {}, h("div", { class: "det-no" }, dot(e), h("span", { class: "num" }, String(e.no)))),
+      h("td", {}, h("div", { class: "det-no num" }, String(e.no))),
       h("td", {}, h("div", { class: "det-detection" }, thumb(e, i, "det-thumb"), tagsFor(e))),
       h("td", {}, workerBtn(e)),
       h("td", {}, h("div", { class: "det-dur" }, h("b", { class: "num" }, `${e.duration.toFixed(1)} s`),
         h("span", {}, plural(e.checks, "check")))),
       h("td", {}, h("div", { class: "det-when" }, stampFor(e), h("span", { class: "num" }, "Video ", h("span", { class: "nowrap" }, incidentTime(e))))),
-      h("td", {}, playBtn(e)),
-      h("td", {}, outcomePill(e)));
+      h("td", {}, playBtn(e)));
   }
 
   function tile(e, i) {
@@ -212,10 +196,10 @@ export function createDetections(run) {
       h("div", { class: "det-tile-top" },
         thumb(e, i, "det-tile-thumb"),
         h("label", { class: "det-tile-sel" }, checkbox(e)),
-        h("span", { class: "det-tile-no num" }, dot(e), `No. ${e.no}`)),
+        h("span", { class: "det-tile-no num" }, `No. ${e.no}`)),
       h("div", { class: "det-tile-body" },
         tagsFor(e),
-        h("div", { class: "det-tile-meta" }, workerBtn(e), outcomePill(e)),
+        h("div", { class: "det-tile-meta" }, workerBtn(e)),
         stampFor(e),
         h("span", { class: "hint num" }, `${incidentTime(e)} · ${e.duration.toFixed(1)} s · ${plural(e.checks, "check")}`),
         playBtn(e)));
@@ -223,7 +207,6 @@ export function createDetections(run) {
 
   function filtered() {
     return all.filter((e) => (!state.item || e.violations.includes(state.item))
-      && (!state.outcome || outcomeOf(e) === state.outcome)
       && (!state.worker || String(e.track_id) === state.worker)
       && (state.from == null || (e.end_sec ?? e.time_sec) >= state.from)
       && (state.to == null || e.time_sec <= state.to));
@@ -259,7 +242,7 @@ export function createDetections(run) {
     const picked = shown.filter((e) => selected.has(e.no)).length;
     allBox.checked = shown.length > 0 && picked === shown.length;
     allBox.indeterminate = picked > 0 && picked < shown.length;
-    resetBtn.disabled = !state.item && !state.outcome && !state.worker && state.from == null && state.to == null
+    resetBtn.disabled = !state.item && !state.worker && state.from == null && state.to == null
       && !fFrom.value && !fTo.value && !selected.size && state.sort === "time" && state.dir === 1;
 
     rowEls.clear();
@@ -285,8 +268,8 @@ export function createDetections(run) {
   }
 
   function reset() {
-    Object.assign(state, { item: "", outcome: "", worker: "", from: null, to: null, sort: "time", dir: 1 });
-    for (const el of [fItem.el, fOutcome.el, fWorker.el]) el.value = "";
+    Object.assign(state, { item: "", worker: "", from: null, to: null, sort: "time", dir: 1 });
+    for (const el of [fItem.el, fWorker.el]) el.value = "";
     for (const el of [fFrom, fTo]) { el.value = ""; el.classList.remove("is-invalid"); }
     selected.clear();
     draw();
@@ -295,10 +278,10 @@ export function createDetections(run) {
   function exportCsv() {
     const rows = selected.size ? all.filter((e) => selected.has(e.no)) : shown;
     const cell = (v) => { const t = String(v ?? ""); return /[",\r\n]/.test(t) ? `"${t.replaceAll('"', '""')}"` : t; };
-    const lines = [["No.", "Worker", "Missing PPE", "Start (video)", "End (video)", "Duration (s)", "Checks", "Detected at", "Outcome"],
+    const lines = [["No.", "Worker", "Missing PPE", "Start (video)", "End (video)", "Duration (s)", "Checks", "Detected at"],
       ...rows.map((e) => [e.no, e.track_id != null ? `#${e.track_id}` : "", e.violations.join("; "),
         fmt.timePrecise(e.time_sec), fmt.timePrecise(e.end_sec ?? e.time_sec), e.duration.toFixed(1), e.checks,
-        e.detected_at ?? "", outcomeOf(e) ? OUTCOMES[outcomeOf(e)][live ? "live" : "label"] : ""])];
+        e.detected_at ?? ""])];
     const blob = new Blob(["﻿" + lines.map((r) => r.map(cell).join(",")).join("\r\n")], { type: "text/csv" });
     const a = h("a", { href: URL.createObjectURL(blob), download: `${m.name}_violations.csv` });
     document.body.append(a);
@@ -308,10 +291,9 @@ export function createDetections(run) {
   }
 
   const intro = h("p");
-  const legend = h("div", { class: "legend" });
   const count = h("span", { class: "pill failed", hidden: true });
   const el = h("section", { class: "card card-pad det-card", id: "violations" },
-    h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Violations ", count), intro), legend),
+    h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Violations ", count), intro)),
     empty, filters, scroller);
 
   function update(run) {
@@ -328,7 +310,6 @@ export function createDetections(run) {
     const workers = [...new Set(all.map((e) => e.track_id).filter((id) => id != null))].sort((a, b) => a - b);
     setOptions(fItem, types.map((t) => [t, t]));
     setOptions(fWorker, workers.map((id) => [String(id), `#${id}`]));
-    setOptions(fOutcome, Object.entries(OUTCOMES).map(([k, o]) => [k, live ? o.live : o.label]));
     if (first) seen = all.length; // only violations found while watching slide in
 
     intro.textContent = live
@@ -336,11 +317,6 @@ export function createDetections(run) {
       : "One row per incident: a worker whose status showed missing PPE, from the first to the last check in a row. Click a photo to see it, or Play to watch it in the video above.";
     count.hidden = !all.length;
     count.textContent = String(all.length);
-    const open = all.filter((e) => e.resolved === false).length;
-    const fixed = all.filter((e) => e.resolved === true).length;
-    legend.replaceChildren(...(all.length ? [
-      h("span", {}, h("i", { style: "background:var(--critical)" }), `${open} ${live ? "ongoing" : "unresolved"}`),
-      h("span", {}, h("i", { style: "background:var(--warning)" }), `${fixed} corrected`)] : []));
     draw();
   }
 

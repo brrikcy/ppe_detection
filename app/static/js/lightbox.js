@@ -86,6 +86,7 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
     img.hidden = !url;
     empty.hidden = !!url;
     if (url) {
+      img.dataset.clean = String(url === it.cleanUrl);
       img.src = url;
       img.alt = `${m === "crop" ? "Flagged worker" : "Frame"} at ${fmt.timePrecise(it.time_sec)}: ${it.violations.join(", ")}`;
       openLink.href = url;
@@ -130,6 +131,12 @@ export function openLightbox(items, start, { onShowInVideo } = {}) {
     hole.dataset.label = edges[1] > 0.06 ? "above" : edges[3] < 0.94 ? "below" : "inside";
   }
   img.addEventListener("load", placeSpot);
+  // Older runs' box-free frames are made on request; if that fails, show the annotated frame dimmed.
+  img.addEventListener("error", () => {
+    if (img.dataset.clean !== "true") return;
+    items[index].cleanUrl = null;
+    render();
+  });
   window.addEventListener("resize", placeSpot);
 
   function setMode(m) {

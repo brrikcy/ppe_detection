@@ -30,9 +30,13 @@ def frame_name(frame: int) -> str:
     return f"{frame:06d}.jpg"
 
 
+CLEAN_SUFFIX = "_clean.jpg"
+
+
 def clean_frame_name(frame_image: str) -> str:
-    """The same frame without boxes, saved next to the annotated one (runs made from now on)."""
-    return frame_image.removesuffix(".jpg") + "_clean.jpg"
+    """The same frame without boxes, saved next to the annotated one. Runs made before it was
+    saved get it from the input video when it's first requested (routes.runs.get_frame)."""
+    return frame_image.removesuffix(".jpg") + CLEAN_SUFFIX
 
 
 def person_photo_name(track_id: int) -> str:
@@ -99,8 +103,9 @@ def _incidents(timeline: list[dict], available_snapshots, available_frames) -> l
         return name if available_frames is None or name in available_frames else None
 
     def clean_image(entry):
-        name = clean_frame_name(frame_name(entry["frame"]))
-        return name if available_frames is not None and name in available_frames else None
+        # Wherever there's an annotated frame; older runs' copies are made on request.
+        name = frame_image(entry)
+        return clean_frame_name(name) if name else None
 
     events: list[ViolationEvent] = []
     open_by_person: dict[int, dict] = {}

@@ -111,9 +111,9 @@ def test_incident_records_when_it_was_detected_and_whether_it_was_resolved():
     assert build_summary(run("OOMMMM")).events[0].detected_at is None  # runs made before it was recorded
 
 
-def test_violation_links_the_frame_without_boxes_when_it_was_saved():
+def test_violation_links_the_frame_without_boxes():
     timeline = run("MMMM")
-    [with_clean] = build_summary(timeline, available_frames={"000010.jpg", "000010_clean.jpg"}).events
-    assert (with_clean.frame_image, with_clean.clean_image) == ("000010.jpg", "000010_clean.jpg")
-    [older] = build_summary(timeline, available_frames={"000010.jpg"}).events
-    assert older.clean_image is None
+    [e] = build_summary(timeline, available_frames={"000010.jpg"}).events  # older runs: made on request
+    assert (e.frame_image, e.clean_image) == ("000010.jpg", "000010_clean.jpg")
+    [no_frame] = build_summary(timeline, available_frames=set()).events
+    assert no_frame.clean_image is None

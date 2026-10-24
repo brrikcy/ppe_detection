@@ -547,8 +547,6 @@ select.input { font-family: var(--body); }
 .det-sort-icon svg { width: 14px; height: 14px; }
 th.is-sorted .det-sort-btn, th.is-sorted .det-sort-icon { color: var(--fg); }
 .det-no { display: flex; align-items: center; gap: 10px; font: 500 13px var(--mono); }
-.det-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--critical); box-shadow: 0 0 0 3px var(--critical-soft); }
-.det-dot.is-fixed { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
 .det-detection { display: flex; align-items: center; gap: 10px; min-width: 170px; }
 .det-detection .tags { display: grid; justify-items: start; gap: 4px; }
 .det-thumb, .det-tile-thumb { display: grid; place-items: center; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-2); cursor: zoom-in; }
@@ -569,22 +567,17 @@ th.is-sorted .det-sort-btn, th.is-sorted .det-sort-icon { color: var(--fg); }
 .det-play span { display: inline-flex; }
 .det-play svg { width: 14px; height: 14px; }
 .det-play:hover { text-decoration: underline; }
-.det-outcome { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 12px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
-.det-outcome.is-open { background: var(--critical-soft); color: var(--critical); }
-.det-outcome.is-fixed { background: var(--warning-soft); color: var(--warning); }
 .det-none { display: grid; justify-items: center; gap: 10px; padding: 40px 20px; color: var(--muted); text-align: center; }
 .det-scroll.is-grid .det-none { border-radius: var(--r); background: var(--surface); }
 
 .det-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 .det-tile { display: grid; grid-template-rows: auto 1fr; overflow: hidden; border: 1px solid var(--line); border-top: 3px solid var(--critical); border-radius: var(--r); background: var(--surface); }
-.det-tile:has(.det-dot.is-fixed) { border-top-color: var(--warning); }
 .det-tile.is-selected { outline: 2px solid var(--info); outline-offset: -1px; }
 .det-tile.is-now { box-shadow: 0 0 0 3px var(--critical-soft); }
 .det-tile-top { position: relative; }
 .det-tile-thumb { width: 100%; height: 200px; border: 0; border-radius: 0; }
 .det-tile-sel { position: absolute; top: 8px; left: 8px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 4px; background: rgb(255 255 255 / .9); cursor: pointer; }
 .det-tile-no { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 12px; background: rgb(0 0 0 / .65); color: #fff; font: 500 12px var(--mono); }
-.det-tile-no .det-dot { width: 8px; height: 8px; box-shadow: none; }
 .det-tile-body { display: grid; align-content: start; gap: 8px; padding: 10px 12px 12px; font-size: 13px; }
 .det-tile-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 @media (max-width: 760px) {
@@ -592,7 +585,6 @@ th.is-sorted .det-sort-btn, th.is-sorted .det-sort-icon { color: var(--fg); }
   .det-field, .det-range { flex-basis: 100%; }
 }
 .det-play:disabled { color: var(--muted); cursor: not-allowed; text-decoration: none; }
-.det-outcome.is-live::before { content: ""; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
 .det-table tr.is-new, .det-tile.is-new { animation: slide-in .45s ease both; }
 .det-card .card-head h2 { display: flex; align-items: center; gap: 8px; }
 
@@ -608,4 +600,4 @@ th.is-sorted .det-sort-btn, th.is-sorted .det-sort-icon { color: var(--fg); }
 .lb-box-label { position: absolute; left: -3px; bottom: calc(100% + 3px); padding: 3px 9px; border-radius: 3px; background: #d03b3b; color: #fff; font: 700 15px/1.2 var(--body); white-space: nowrap; box-shadow: 0 2px 8px rgb(0 0 0 / .4); }
 .lb-hole[data-label="below"] .lb-box-label { top: calc(100% + 3px); bottom: auto; }
 .lb-hole[data-label="inside"] .lb-box-label { top: 3px; left: 3px; bottom: auto; }
-@media (prefers-reduced-motion: reduce) { .lb-hole { transition: none; } .det-outcome.is-live::before { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .lb-hole { transition: none; } }

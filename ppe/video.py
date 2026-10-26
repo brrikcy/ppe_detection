@@ -157,6 +157,20 @@ class _Output:
         self._thread.join(timeout=5)
 
 
+def default_people_tracker(cfg, fps: float):
+    """YOLO + BoT-SORT person tracker with the run's tracking settings (see ppe.people)."""
+    from .people import DEFAULT_MODEL, MODELS_DIR, YoloPersonTracker
+
+    tun = cfg.tuning
+    model = MODELS_DIR / tun.person_model if tun.person_model else Path(cfg.person_model or DEFAULT_MODEL)
+    return YoloPersonTracker(fps=fps, model_path=model, imgsz=tun.detector_imgsz,
+                             conf=tun.detector_conf, hidden_sec=tun.hidden_sec,
+                             min_age_sec=tun.min_track_age_sec, coast_sec=tun.coast_sec,
+                             with_reid=tun.with_reid, fixed_camera=tun.fixed_camera,
+                             detect_fps=tun.detect_fps,
+                             tracker_overrides={"new_track_thresh": tun.new_track_thresh})
+
+
 def process_video(
     input_path: str | Path,
     output_path: str | Path,
@@ -226,18 +240,7 @@ def process_video(
     log.info("%s: %dx%d @ %.1ffps, %d frames, checking every %d frames (%s decoding%s)",
              input_path.name, width, height, fps, total, step, reader.decoder, ", live" if live else "")
 
-    if people_factory is None:
-        from .people import DEFAULT_MODEL, MODELS_DIR, YoloPersonTracker
-
-        model = MODELS_DIR / tun.person_model if tun.person_model else Path(cfg.person_model or DEFAULT_MODEL)
-        people = YoloPersonTracker(fps=fps, model_path=model, imgsz=tun.detector_imgsz,
-                                   conf=tun.detector_conf, hidden_sec=tun.hidden_sec,
-                                   min_age_sec=tun.min_track_age_sec, coast_sec=tun.coast_sec,
-                                   with_reid=tun.with_reid, fixed_camera=tun.fixed_camera,
-                                   detect_fps=tun.detect_fps,
-                                   tracker_overrides={"new_track_thresh": tun.new_track_thresh})
-    else:
-        people = people_factory(fps)
+    people = people_factory(fps) if people_factory else default_people_tracker(cfg, fps)
     writer = FrameWriter(output_path, width, height, fps, audio_source=input_path, max_seconds=max_seconds)
     frames = _Prefetch(reader, total)
     output = _Output(writer, fps, total, realtime=live, on_frame=on_frame, on_progress=on_progress)

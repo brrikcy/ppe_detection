@@ -194,6 +194,24 @@ moondream_server/       Moondream on a local GPU with the Cloud API (serve.py), 
 deploy/                 setup_gpu.sh and start.sh for a GPU server
 ```
 
+## Inference flowchart
+
+```bash
+python run_trace.py          # opens http://127.0.0.1:8100
+```
+
+A separate FastAPI app (`inference_trace/`) for seeing inside one run. Upload a video, choose the PPE items, the check interval and whether to use the Developer options saved in the main app or the defaults (every confirmation step on), and it runs the video through the same pipeline and backend as the web app (settings from `.env`, the same key handling, `ppe.video`, `app.services.summary`) while recording every step. The flowchart fills in while it runs and has seven stages:
+
+1. **Input video**: decoding and which frames are sampled.
+2. **Settings and prompts**: the exact question sent for each item, detect terms, body parts and regions, and which decision rules are on.
+3. **Person detection and tracking**: detector and tracker settings, and a lifeline per tracked person with a dot for every check, coloured by its result.
+4. **Check schedule**: every regular and arrival check; pick one.
+5. **Inside a check**: the frame without boxes and every tracked worker, then for each worker: size gate → the crop sent to Moondream → per item every Moondream call (the image, the exact prompt, the raw answer, the round trip and Moondream's own processing time), how the answer was read, each decision (overlap, detect boxes and why each counts or not, re-checks, body part), the item's result and why → this check's finding → the vote over the last checks → the tag drawn in the video. Settings that are off appear as dashed "skipped" steps.
+6. **From checks to violations**: how checks group into violations (each linked to its checks) and the figures with their formulas filled in.
+7. **Outputs**: the annotated video, the report and the trace.
+
+Click any box for its details (images, raw data and an explanation); ← → move between checks. Traces are kept in `traces/<id>/` (`trace.json`, `images/`, `annotated.mp4`, `report.json`). It makes the same Moondream calls as a normal run. The recording uses `PPEAnalyzer.trace_hook` and a wrapper around its `_call`; with no hook set, the main app records nothing extra.
+
 ## Command line
 
 ```bash

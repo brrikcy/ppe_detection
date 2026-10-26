@@ -141,6 +141,11 @@ def overlap_share(box, others) -> float:
 
 
 class PPEAnalyzer:
+    # Optional: called as trace_hook(result, record) after every worker check, with each item's
+    # steps (see _item_status) and the crop that was asked about. Used by inference_trace;
+    # None (the default) records nothing.
+    trace_hook = None
+
     def __init__(self, config: Config, model=None):
         self.config = config
         if model is None:
@@ -282,16 +287,20 @@ class PPEAnalyzer:
         status = self._item_status(image, crop, crop_box, item, tuple(box), [tuple(o) for o in others], trace)
         return {"item": item, "status": status, "steps": trace, "crop": crop}
 
-    def _answers_together(self, crop: Image.Image, items: list[str]) -> dict[str, str]:
+    def _answers_together(self, crop: Image.Image, items: list[str], trace: list | None = None) -> dict[str, str]:
         """One question for all items; returns the replies it could read (others are asked one by one)."""
+        question = self.tuning.multi_question_for(items)
         try:
-            reply = self._call(self.model.query, crop, self.tuning.multi_question_for(items)).get("answer", "")
+            reply = self._call(self.model.query, crop, question).get("answer", "")
         except (AuthError, ModelError):
             raise
         except Exception:
             log.warning("Combined PPE question failed; asking item by item", exc_info=True)
             return {}
-        return _parse_multi(reply, items)
+        parsed = _parse_multi(reply, items)
+        if trace is not None:
+            trace.append({"step": "query_all", "question": question, "answer": reply, "parsed": parsed})
+        return parsed
 
     def check_worker(self, image: Image.Image, box, others=()) -> WorkerResult:
         """`others` are the other workers' boxes in the frame, so their PPE isn't credited to this one."""
@@ -300,10 +309,13 @@ class PPEAnalyzer:
         crop_box = self._crop_box(image, box)
         crop = image.crop(crop_box)
         items = list(self.config.required_ppe)
-        answers = self._answers_together(crop, items) if self.tuning.one_query_per_worker and len(items) > 1 else {}
+        traces = {item: [] for item in items} if self.trace_hook else {}
+        together = [] if self.trace_hook else None
+        answers = (self._answers_together(crop, items, together)
+                   if self.tuning.one_query_per_worker and len(items) > 1 else {})
         futures = {
             item: self._pool.submit(self._item_status, image, crop, crop_box, item, box, others,
-                                    None, answers.get(item))
+                                    traces.get(item), answers.get(item))
             for item in items
         }
         statuses, failed, error = {}, [], None
@@ -316,7 +328,7 @@ class PPEAnalyzer:
                 log.warning("PPE check of %s failed: %s", item, exc)
                 failed.append(item)
                 error = error or str(exc) or exc.__class__.__name__
-        return WorkerResult(
+        result = WorkerResult(
             box=box,
             violations=[PPE_CATALOG[i].label for i, st in statuses.items() if st == "missing"],
             unverified=[i for i, st in statuses.items() if st == "unverified"],
@@ -324,6 +336,13 @@ class PPEAnalyzer:
             check_failed=bool(items) and len(failed) == len(items),
             error=error,
         )
+        if self.trace_hook:
+            self.trace_hook(result, {
+                "image": image, "crop": crop, "crop_box": crop_box, "box": box, "others": list(others),
+                "together": together,
+                "items": {i: {"status": statuses.get(i, "failed"), "steps": traces[i]} for i in items},
+            })
+        return result
 
     def check_workers(self, image: Image.Image, boxes, all_boxes=None) -> list[WorkerResult]:
         """Check `boxes` in parallel. `all_boxes` (default: `boxes`) are everyone in the frame,

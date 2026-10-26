@@ -85,17 +85,29 @@ def test_confirmation_steps_can_be_switched_off():
     # Default: "no" -> detect hard hat (none) -> detect head (found) -> missing
     steps = analyze(Tuning(), Recording())["steps"]
     assert [s["step"] for s in steps if s["step"] != "detect_object"] == ["query", "detect", "detect"]
-    # No confirmation: the "no" alone decides.
+    # No detect for the item: only the body part is looked for.
     out = analyze(Tuning(confirm_no_with_detect=False), Recording())
+    assert out["status"] == "missing" and [s["step"] for s in out["steps"] if s["step"] != "detect_object"] == ["query", "detect"]
+    # Neither: the "no" alone decides.
+    out = analyze(Tuning(confirm_no_with_detect=False, check_body_part=False), Recording())
     assert out["status"] == "missing" and [s["step"] for s in out["steps"]] == ["query"]
 
 
+class NoHead(Recording):
+    def detect(self, image, obj):
+        return {"objects": []}
+
+
 def test_body_part_check_can_be_switched_off():
-    class NoHead(Recording):
-        def detect(self, image, obj):
-            return {"objects": []}
     assert analyze(Tuning(), NoHead())["status"] == "unverified"
     assert analyze(Tuning(check_body_part=False), NoHead())["status"] == "missing"
+
+
+def test_hidden_body_part_is_unverified_without_detect_double_check():
+    # A worker behind a wall: "no boots", and no feet to be found.
+    out = analyze(Tuning(confirm_no_with_detect=False), NoHead(), item="boots")
+    assert out["status"] == "unverified"
+    assert [s.get("term") for s in out["steps"] if s["step"] == "detect"] == ["foot"]
 
 
 def test_min_check_height_and_padding():

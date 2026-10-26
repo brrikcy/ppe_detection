@@ -96,7 +96,7 @@ python run.py --port 8080 --no-browser
 - **PPE items**: one card (or, in the List layout, one tab) per item with its wording, detect term, the body part that must be visible, the region of the worker's box where the item may be, and the plausible width and height of a detected box. A dot marks an item changed from the defaults.
 - **Decision rules**:
   - what an unclear answer counts as (present, unverified or missing)
-  - whether "no" answers are double-checked with detect, and whether a hidden body part then makes an item unverified
+  - whether "no" answers are double-checked with detect, and, separately, whether a hidden body part makes an item unverified (one detect call per "no")
   - whether a "yes" is confirmed when workers overlap, and how much overlap triggers it
   - for both double-checks: how much of a detected box must be in the item's region, and whether Moondream is re-asked about the box
   - crop padding, and the minimum worker height to check (share of the frame and pixels)

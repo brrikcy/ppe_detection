@@ -13,8 +13,7 @@ const offUnless = (key, label) => (d) => (d[key] ? null : `Not used while “${l
 // Detected boxes are judged by both double-checks.
 const usesDetect = (d) => (d.confirm_no_with_detect || d.confirm_yes_on_overlap ? null
   : `Not used while “${NO_CHECK}” and “${YES_CHECK}” are both off.`);
-const usesBodyPart = (d) => (!d.confirm_no_with_detect ? `Not used while “${NO_CHECK}” is off.`
-  : !d.check_body_part ? "Not used while “Unverified when the body part can't be seen” is off." : null);
+const usesBodyPart = (d) => (d.check_body_part ? null : "Not used while “Unverified when the body part can't be seen” is off.");
 const usesVerify = (d) => usesDetect(d) ?? (d.verify_detected_box ? null : "Not used while “Re-ask about the detected box” is off.");
 
 const f = (key, type, label, hint, extra = {}) => ({ key, type, label, hint, ...extra });
@@ -32,10 +31,9 @@ const CARDS = [
       ] },
       { title: "When Moondream says “no”", fields: [
         f("confirm_no_with_detect", "toggle", NO_CHECK,
-          "A “no” only counts if detect can't find the item on this worker. Off: fewer calls per “no”, more false alarms."),
+          "A “no” only counts if detect can't find the item on this worker. Off: fewer calls per “no”, and no item found by mistake, but a “no” about a visible worker always counts."),
         f("check_body_part", "toggle", "Unverified when the body part can't be seen",
-          "If the head (for a helmet) isn't visible, the item is unverified instead of missing.",
-          { child: true, dependsOn: offUnless("confirm_no_with_detect", NO_CHECK) }),
+          "If the head (helmet), face (goggles, mask), hands (gloves) or feet (boots) can't be found on the worker, the item is unverified instead of missing. One detect call per “no”, with or without the double-check above."),
       ] },
       { title: "When Moondream says “yes”", fields: [
         f("confirm_yes_on_overlap", "toggle", YES_CHECK,

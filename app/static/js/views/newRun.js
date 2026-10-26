@@ -161,7 +161,6 @@ export async function renderNewRun(root, { onCreated }) {
         h("div", { class: "field" },
           h("label", { class: "label", for: "alpha" }, "Alpha"),
           alpha,
-          h("span", { class: "hint" }, "How confident the tracker must be to start following a new person (0.05–0.95, default 0.5). Lower finds more hard-to-see workers but adds short, false IDs. Each site may need its own value; it is kept for later runs."),
           alphaStatus),
         h("div", { class: "field" },
           h("label", { class: "label", for: "max-seconds" }, "Only the first … seconds"),

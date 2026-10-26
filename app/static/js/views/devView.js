@@ -4,7 +4,7 @@
 import { api, apiKey } from "../api.js";
 import { fmt, h } from "../ui.js";
 
-const ITEM_LABELS = { helmet: "Helmet", vest: "Vest", gloves: "Gloves", boots: "Boots", goggles: "Goggles", mask: "Mask" };
+const ITEM_LABELS = { helmet: "Helmet", vest: "Vest", gloves: "Gloves", boots: "Boots", goggles: "Goggles" };
 
 // Settings that only matter when another one is on: return why a field is unused, or null.
 const NO_CHECK = "Double-check “no” answers with detect";
@@ -33,7 +33,7 @@ const CARDS = [
         f("confirm_no_with_detect", "toggle", NO_CHECK,
           "A “no” only counts if detect can't find the item on this worker. Off: fewer calls per “no”, and no item found by mistake, but a “no” about a visible worker always counts."),
         f("check_body_part", "toggle", "Unverified when the body part can't be seen",
-          "If the head (helmet), face (goggles, mask), hands (gloves) or feet (boots) can't be seen on the worker, the item is unverified instead of missing. One call per “no”, with or without the double-check above: detect looks for the body part, or Moondream is asked if the item has a body part question (boots)."),
+          "If the head (helmet), face (goggles), hands (gloves) or feet (boots) can't be seen on the worker, the item is unverified instead of missing. One call per “no”, with or without the double-check above: detect looks for the body part, or Moondream is asked if the item has a body part question (boots)."),
       ] },
       { title: "When Moondream says “yes”", fields: [
         f("confirm_yes_on_overlap", "toggle", YES_CHECK,
@@ -117,8 +117,9 @@ const CARDS = [
           { min: 0.01, max: 0.9, step: 0.01 }),
       ] },
       { title: "Keeping IDs", fields: [
-        f("new_track_thresh", "number", "Confidence to start a new person",
-          "Lower tracks more hard-to-see workers but creates more short, spurious IDs.", { min: 0.05, max: 0.95, step: 0.05 }),
+        f("new_track_thresh", "number", "Alpha",
+          "Confidence a detection needs to start a new person. Lower tracks more hard-to-see workers but creates more short, spurious IDs. Also set on the New inspection page.",
+          { min: 0.05, max: 0.95, step: 0.05 }),
         f("min_track_age_sec", "number", "Ignore tracks younger than",
           "Filters flicker: a track must last this long before its box is drawn. Checks wait longer (see “Check a new person after”).",
           { min: 0, max: 3, step: 0.1, unit: "s" }),

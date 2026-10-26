@@ -50,6 +50,14 @@ def test_missing_items_fall_back_to_defaults_and_changes_are_listed():
     assert Tuning().changes() == []
 
 
+def test_settings_saved_with_the_retired_mask_item_still_load():
+    old = Tuning().model_dump()
+    old["items"]["mask"] = {"question": "a face mask or respirator", "detect_term": "face mask", "body_part": "face"}
+    old["new_track_thresh"] = 0.3
+    t = Tuning.model_validate(old)
+    assert "mask" not in t.items and t.changes() == ["new_track_thresh"]
+
+
 # ---- effect on the analyzer ------------------------------------------------------
 class Recording(FakeModel):
     def __init__(self, answer=None):

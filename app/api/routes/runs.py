@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from ppe.config import parse_required
+from ppe.config import PPE_CATALOG, parse_required
 
 from ...core.settings import Settings
 from ...schemas.runs import (
@@ -147,9 +147,15 @@ async def rerun(
         key, key_source = resolve_key(body.api_key, settings)
     except MissingKey as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+    # An old run may require an item that is no longer offered (mask); the rerun skips it.
+    required = [i for i in meta.options.required_ppe if i in PPE_CATALOG]
+    if not required:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            "None of this run's PPE items can be checked any more")
     endpoint = endpoint_for(key_source, settings)
     await _check_key(verify, key, key_source, endpoint)
-    options = meta.options.model_copy(update={"tuning": dev.get() if body.settings == "current" else meta.options.tuning})
+    options = meta.options.model_copy(update={
+        "required_ppe": required, "tuning": dev.get() if body.settings == "current" else meta.options.tuning})
     return await _start_run(store, runner, meta.name, key, key_source, endpoint, options, source.suffix,
                             lambda dest: _link_or_copy(source, dest), rerun_of=run_id)
 

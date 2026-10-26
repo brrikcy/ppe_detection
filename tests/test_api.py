@@ -1,5 +1,6 @@
 """API tests with a fake Moondream model (no network, no API key)."""
 
+import json
 import time
 
 import cv2
@@ -67,6 +68,27 @@ def test_config_reports_server_key(client):
     body = client.get("/api/config").json()
     assert body["server_key_configured"] is True
     assert {"key": "helmet", "label": "Helmet"} in body["ppe_items"]
+    assert "mask" not in [i["key"] for i in body["ppe_items"]]
+
+
+def test_mask_is_no_longer_offered_but_old_mask_runs_still_load_and_rerun(client, tmp_path):
+    assert _upload(client, tmp_path, required_ppe="helmet,mask").status_code == 422
+    first = _upload(client, tmp_path, required_ppe="helmet", max_seconds="1").json()
+    run_id = first["meta"]["id"]
+    _wait(client, run_id)
+    # Make it look like a run from before mask was removed.
+    meta_path = tmp_path / "runs" / run_id / "meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["options"]["required_ppe"] = ["helmet", "mask"]
+    meta["options"]["tuning"]["items"]["mask"] = {"question": "a face mask", "detect_term": "face mask"}
+    meta_path.write_text(json.dumps(meta))
+
+    assert client.get(f"/api/runs/{run_id}").json()["meta"]["options"]["required_ppe"] == ["helmet", "mask"]
+    assert run_id in [r["id"] for r in client.get("/api/runs").json()]
+    r = client.post(f"/api/runs/{run_id}/rerun", json={"settings": "original"})
+    assert r.status_code == 201, r.text
+    again = _wait(client, r.json()["meta"]["id"])
+    assert again["meta"]["status"] == "completed" and again["meta"]["options"]["required_ppe"] == ["helmet"]
 
 
 def test_full_run_lifecycle(client, tmp_path):

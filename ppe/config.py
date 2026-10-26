@@ -24,7 +24,6 @@ PPE_CATALOG: dict[str, PPEItem] = {
     "gloves": PPEItem("No Gloves"),
     "boots": PPEItem("No Boots"),
     "goggles": PPEItem("No Goggles"),
-    "mask": PPEItem("No Mask"),
 }
 
 

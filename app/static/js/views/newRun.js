@@ -76,6 +76,41 @@ export async function renderNewRun(root, { onCreated }) {
   const estimate = h("div", { class: "estimate" });
   const liveBox = h("input", { type: "checkbox", name: "live", checked: true });
 
+  // ---- alpha: the tracker's confidence to start a new person ----
+  // A saved developer setting (new_track_thresh): changing it here changes it for later runs too.
+  const devNote = h("div", { class: "field" });
+  function showDevChanges(changes) {
+    devNote.hidden = !changes.length;
+    devNote.replaceChildren(h("div", { class: "dev-note" },
+      `Developer settings: ${changes.length} change${changes.length === 1 ? "" : "s"} from the defaults will be used. `,
+      h("a", { href: "#dev" }, "Review")));
+  }
+  showDevChanges(dev.changes);
+  const alpha = h("input", { id: "alpha", class: "input", type: "number", min: "0.05", max: "0.95", step: "0.05",
+    value: dev.active.new_track_thresh, style: "max-width:120px" });
+  const alphaStatus = h("span", { class: "hint", role: "status", hidden: true });
+  const sayAlpha = (text) => { alphaStatus.textContent = text; alphaStatus.hidden = false; };
+  let alphaSaved = Promise.resolve(true); // the latest save; a run waits for it
+  async function saveAlpha() {
+    const v = Number(alpha.value);
+    if (!(alpha.value !== "" && v >= 0.05 && v <= 0.95)) {
+      sayAlpha("Alpha must be between 0.05 and 0.95.");
+      return false;
+    }
+    try {
+      const current = (await api.dev.get()).active; // fresh, so other settings saved elsewhere are kept
+      if (current.new_track_thresh !== v) {
+        showDevChanges((await api.dev.save({ ...current, new_track_thresh: v })).changes);
+      }
+      sayAlpha(`Saved: new runs use alpha ${v}.`);
+      return true;
+    } catch (err) {
+      sayAlpha(`Couldn't save alpha: ${err.message}`);
+      return false;
+    }
+  }
+  alpha.addEventListener("change", () => { alphaSaved = saveAlpha(); });
+
   function selectedItems() {
     return [...checks.querySelectorAll("input:checked")].map((i) => i.value);
   }
@@ -124,14 +159,17 @@ export async function renderNewRun(root, { onCreated }) {
           seg,
           h("span", { class: "hint" }, "Shorter intervals catch more but take longer.")),
         h("div", { class: "field" },
+          h("label", { class: "label", for: "alpha" }, "Alpha"),
+          alpha,
+          h("span", { class: "hint" }, "How confident the tracker must be to start following a new person (0.05–0.95, default 0.5). Lower finds more hard-to-see workers but adds short, false IDs. Each site may need its own value; it is kept for later runs."),
+          alphaStatus),
+        h("div", { class: "field" },
           h("label", { class: "label", for: "max-seconds" }, "Only the first … seconds"),
           maxSec),
         h("div", { class: "field" },
           h("label", { class: "check" }, liveBox, "Live mode"),
           h("span", { class: "hint" }, "Plays the video at normal speed while it's inspected. A worker's PPE tag can follow about a second behind.")),
-        dev.changes.length ? h("div", { class: "field" }, h("div", { class: "dev-note" },
-          `Developer settings: ${dev.changes.length} change${dev.changes.length === 1 ? "" : "s"} from the defaults will be used. `,
-          h("a", { href: "#dev" }, "Review"))) : null,
+        devNote,
         keyNote ? h("div", { class: "field" }, keyNote) : null,
         h("div", { class: "field" }, estimate),
         h("div", { class: "submit-row" }, runBtn, uploadBar),
@@ -145,6 +183,10 @@ export async function renderNewRun(root, { onCreated }) {
     if (!items.length) return (formError.textContent = "Select at least one PPE item.");
     if (!enteredKey && !config.server_key_configured)
       return (formError.textContent = "Add an API key in Developer options first.");
+    // The run takes its tracker settings from the saved developer settings, so alpha must be saved first.
+    // Saved again here too: Enter in the alpha box can submit before its change event.
+    alphaSaved = alphaSaved.then(saveAlpha);
+    if (!(await alphaSaved)) return (formError.textContent = "Fix alpha first.");
 
     const body = new FormData();
     body.append("video", file);

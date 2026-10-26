@@ -84,7 +84,8 @@ class WorkerResult:
 
 def item_name(item: str) -> str:
     """ "helmet" -> "Helmet" (the catalog label without "No ")."""
-    return PPE_CATALOG[item].label.removeprefix("No ") if item in PPE_CATALOG else item
+    # Old runs may name an item that is no longer offered (mask).
+    return PPE_CATALOG[item].label.removeprefix("No ") if item in PPE_CATALOG else item.capitalize()
 
 
 def _with_retries(fn, *args, attempts: int = 6, **kwargs):

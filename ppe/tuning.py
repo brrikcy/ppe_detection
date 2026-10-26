@@ -90,10 +90,10 @@ DEFAULT_ITEMS: dict[str, ItemTuning] = {
     "goggles": ItemTuning(question="safety goggles or safety glasses", detect_term="safety goggles",
                           body_part="face", region_top=-0.05, region_bottom=0.35,
                           min_width=0.02, max_width=0.7, min_height=0.005, max_height=0.15),
-    "mask": ItemTuning(question="a face mask or respirator", detect_term="face mask", body_part="face",
-                       region_top=-0.05, region_bottom=0.4,
-                       min_width=0.02, max_width=0.7, min_height=0.01, max_height=0.2),
 }
+# Items no longer offered. Settings saved before their removal (and the copies kept by old
+# runs) still load: these entries are dropped instead of rejected.
+RETIRED_ITEMS = ("mask",)
 
 
 class Tuning(BaseModel):
@@ -176,8 +176,8 @@ class Tuning(BaseModel):
     @classmethod
     def _fill_items(cls, v):
         """Missing items and fields fall back to their defaults (so settings saved by an older
-        version get the newer fields' defaults); unknown items are rejected."""
-        v = dict(v or {})
+        version get the newer fields' defaults); retired items are dropped, unknown ones rejected."""
+        v = {k: x for k, x in dict(v or {}).items() if k not in RETIRED_ITEMS}
         unknown = set(v) - set(DEFAULT_ITEMS)
         if unknown:
             raise ValueError(f"unknown PPE item(s): {', '.join(sorted(unknown))}")

@@ -104,9 +104,41 @@ def test_body_part_check_can_be_switched_off():
 
 
 def test_hidden_body_part_is_unverified_without_detect_double_check():
-    # A worker behind a wall: "no boots", and no feet to be found.
-    out = analyze(Tuning(confirm_no_with_detect=False), NoHead(), item="boots")
+    # A worker behind a wall: "no goggles", and no face to be found.
+    out = analyze(Tuning(confirm_no_with_detect=False), NoHead(), item="goggles")
     assert out["status"] == "unverified"
+    assert [s.get("term") for s in out["steps"] if s["step"] == "detect"] == ["face"]
+
+
+class FeetAnswer(Recording):
+    """Says "no" to the boots question; answers the feet question with `feet`. Detect finds anything."""
+
+    def __init__(self, feet):
+        super().__init__()
+        self.feet = feet
+
+    def query(self, image, question):
+        self.questions.append(question)
+        return {"answer": self.feet if "feet" in question else "No."}
+
+    def detect(self, image, obj):
+        return {"objects": [{"x_min": 0.4, "y_min": 0.8, "x_max": 0.5, "y_max": 0.9}]}
+
+
+@pytest.mark.parametrize("feet, status", [("No", "unverified"), ("Not visible", "unverified"), ("Yes", "missing")])
+def test_boots_ask_whether_the_feet_are_visible(feet, status):
+    # A seated worker behind a bin: detect finds a "foot" under the chair, but the feet can't be seen.
+    out = analyze(Tuning(confirm_no_with_detect=False), FeetAnswer(feet), item="boots")
+    assert out["status"] == status
+    assert [s["step"] for s in out["steps"]] == ["query", "body_part"]
+    assert out["steps"][1]["visible"] is (status == "missing")
+
+
+def test_blank_body_part_question_falls_back_to_detect():
+    t = Tuning(confirm_no_with_detect=False, items={"boots": {"body_part_question": " "}})
+    assert t.items["boots"].body_part_question is None
+    out = analyze(t, FeetAnswer("No"), item="boots")
+    assert out["status"] == "missing"  # the detected "foot" counts
     assert [s.get("term") for s in out["steps"] if s["step"] == "detect"] == ["foot"]
 
 

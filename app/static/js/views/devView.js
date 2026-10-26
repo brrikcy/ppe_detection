@@ -33,7 +33,7 @@ const CARDS = [
         f("confirm_no_with_detect", "toggle", NO_CHECK,
           "A “no” only counts if detect can't find the item on this worker. Off: fewer calls per “no”, and no item found by mistake, but a “no” about a visible worker always counts."),
         f("check_body_part", "toggle", "Unverified when the body part can't be seen",
-          "If the head (helmet), face (goggles, mask), hands (gloves) or feet (boots) can't be found on the worker, the item is unverified instead of missing. One detect call per “no”, with or without the double-check above."),
+          "If the head (helmet), face (goggles, mask), hands (gloves) or feet (boots) can't be seen on the worker, the item is unverified instead of missing. One call per “no”, with or without the double-check above: detect looks for the body part, or Moondream is asked if the item has a body part question (boots)."),
       ] },
       { title: "When Moondream says “yes”", fields: [
         f("confirm_yes_on_overlap", "toggle", YES_CHECK,
@@ -143,7 +143,10 @@ const ITEM_ROWS = [
   { key: "question", type: "textarea", label: "Wording", hint: "Replaces {item} in the question template." },
   { key: "detect_term", type: "text", label: "Detect term",
     hint: "What detect looks for to overrule a “no”, or to confirm a “yes” when workers overlap.", dependsOn: usesDetect },
-  { key: "body_part", type: "text", label: "Body part", hint: "If detect can't find it on the worker, the item is unverified. Blank = no check.",
+  { key: "body_part", type: "text", label: "Body part", hint: "If detect can't find it on the worker, the item is unverified. Blank = no check. Not used when there is a body part question.",
+    dependsOn: usesBodyPart, blankIsNull: true },
+  { key: "body_part_question", type: "textarea", label: "Body part question",
+    hint: "Asked about the worker instead of detecting the body part: anything but “yes” makes the item unverified. For feet, because detect finds “feet” under chairs and behind walls. Blank = use detect.",
     dependsOn: usesBodyPart, blankIsNull: true },
   { pair: true, label: "Region", hint: "Where on the worker the item may be, as a share of the box height from the top (negative = above the box).",
     dependsOn: usesDetect, parts: [["region_top", "top", -0.5, 1.5, 0.05], ["region_bottom", "bottom", -0.5, 1.5, 0.05]] },
@@ -635,6 +638,9 @@ async function buildPlayground(getDraft) {
       } else if (s.step === "verify") {
         steps.push(h("li", {}, h("b", {}, "Re-check: "), h("q", {}, s.question), " → ",
           h("code", {}, JSON.stringify(s.answer)), s.confirmed ? " (confirmed)" : " (not confirmed)"));
+      } else if (s.step === "body_part") {
+        steps.push(h("li", {}, h("b", {}, "Body part: "), h("q", {}, s.question), " → ",
+          h("code", {}, JSON.stringify(s.answer)), s.visible ? " (visible)" : " (not visible, so unverified)"));
       } else if (s.step === "detect") {
         steps.push(h("li", {}, h("b", {}, `Detect “${s.term}”: `),
           `${s.found} found${s.found ? `, ${s.on_worker ? "one counts for this worker" : "none counts"}` : ""}`));

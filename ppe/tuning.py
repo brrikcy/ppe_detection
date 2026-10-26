@@ -32,6 +32,8 @@ class ItemTuning(BaseModel):
     question: str = Field(min_length=1, max_length=300)  # fills {item} in the question template
     detect_term: str = Field(min_length=1, max_length=80)  # confirms a "no" answer with detect()
     body_part: str | None = Field(None, max_length=80)  # if not found, the item is unverified
+    # Asked about the crop instead of detecting body_part; anything but "yes" makes the item unverified.
+    body_part_question: str | None = Field(None, max_length=300)
     # Where on the worker the item sits, as fractions of the person box height from the top.
     region_top: float = Field(0.0, ge=-0.5, le=1.5)
     region_bottom: float = Field(1.0, ge=-0.5, le=1.5)
@@ -51,7 +53,7 @@ class ItemTuning(BaseModel):
             raise ValueError("must not be empty")
         return v
 
-    @field_validator("body_part")
+    @field_validator("body_part", "body_part_question")
     @classmethod
     def _blank_is_none(cls, v: str | None) -> str | None:
         return (v or "").strip() or None
@@ -78,7 +80,11 @@ DEFAULT_ITEMS: dict[str, ItemTuning] = {
                        min_width=0.2, max_width=1.3, min_height=0.15, max_height=0.7),
     "gloves": ItemTuning(question="protective work gloves on their hands", detect_term="work glove",
                          body_part="hand", min_width=0.01, max_width=0.5, min_height=0.01, max_height=0.25),
+    # Detect finds a "foot" in a dark patch under a chair or behind a wall, so for feet Moondream
+    # is asked instead. It answers well about feet but not about faces, so other items keep detect.
     "boots": ItemTuning(question="safety boots / work boots", detect_term="boot", body_part="foot",
+                        body_part_question=("Focus on the main person in the centre of this image. "
+                                            "Are this person's feet visible? Answer only yes or no."),
                         region_top=0.6, region_bottom=1.1,
                         min_width=0.02, max_width=0.7, min_height=0.01, max_height=0.35),
     "goggles": ItemTuning(question="safety goggles or safety glasses", detect_term="safety goggles",

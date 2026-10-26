@@ -8,6 +8,7 @@ Workers are found and tracked locally (ppe.people). For each worker due a check:
      box, and not on a neighbour), has a plausible size for the item, and Moondream
      confirms what it is when asked about that box alone. Either way, if the body part
      the item belongs on (e.g. the head) isn't visible, the item is unverified instead.
+     Body parts are looked for with detect, except feet: Moondream is asked about those.
   3. A "yes" for a worker who overlaps a neighbour may be about the neighbour, so it is
      confirmed the same way; if it can't be, the item is unverified.
   4. Confirmed missing items become the violation list for that worker. An item whose
@@ -29,6 +30,7 @@ from PIL import Image
 
 from .config import PPE_CATALOG, Config
 from .moondream_client import AuthError, ModelError
+from .tuning import ItemTuning
 
 log = logging.getLogger(__name__)
 
@@ -261,10 +263,23 @@ class PPEAnalyzer:
                 image, crop, crop_box, spec.detect_term, box, others, spec.region, item, trace):
             return "present"
         # Checked even without the detect above: a "no" about hidden feet is no violation.
-        if t.check_body_part and spec.body_part and not self._found_on_worker(
-                image, crop, crop_box, spec.body_part, box, others, spec.region, None, trace):
+        if t.check_body_part and not self._body_part_visible(image, crop, crop_box, spec, box, others, trace):
             return "unverified"
         return "missing"
+
+    def _body_part_visible(self, image: Image.Image, crop: Image.Image, crop_box, spec: ItemTuning, box, others,
+                           trace: list | None) -> bool:
+        """Whether the body part the item belongs on can be seen; True if the item names none."""
+        if spec.body_part_question:
+            answer = self._call(self.model.query, crop, spec.body_part_question).get("answer", "")
+            visible = _is_yes(answer) is True
+            if trace is not None:
+                trace.append({"step": "body_part", "question": spec.body_part_question, "answer": answer,
+                              "visible": visible})
+            return visible
+        if spec.body_part:
+            return self._found_on_worker(image, crop, crop_box, spec.body_part, box, others, spec.region, None, trace)
+        return True
 
     def explain_item(self, image: Image.Image, item: str, box=None, others=()) -> dict:
         """Check one PPE item and return every step (for tuning).

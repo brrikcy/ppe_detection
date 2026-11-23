@@ -26,6 +26,8 @@ class RunOptions(BaseModel):
     required_ppe: list[str] = Field(default_factory=lambda: ["helmet", "vest"])
     analysis_interval_sec: float = Field(1.0, gt=0, le=30)
     max_seconds: float | None = Field(None, gt=0)
+    # Play at the video's own speed and stream it; PPE labels may follow ~1s behind (ppe.video).
+    live: bool = False
     # Developer settings in force when the run was created (defaults for older runs).
     tuning: Tuning = Field(default_factory=Tuning)
 
@@ -63,6 +65,10 @@ class RunMeta(BaseModel):
     rerun_of: str | None = None  # id of the run whose video this run re-inspected
     options: RunOptions
     video: VideoInfo
+    # [width, height] the video was processed at; worker boxes are in these pixels. Smaller than
+    # `video` when live mode scales tall video down. None until processing starts (older runs:
+    # filled in from the report).
+    frame_size: list[int] | None = None
     progress: Progress = Field(default_factory=Progress)
 
 
@@ -94,6 +100,11 @@ class ViolationEvent(BaseModel):
     track_id: int | None = None  # person id; None for runs made before tracking existed
     snapshot: str | None  # crop of the worker, file name under /snapshots/
     frame_image: str | None = None  # whole annotated frame, file name under /frames/
+    clean_image: str | None = None  # the same frame without boxes, under /frames/ (None: older runs)
+    detected_at: datetime | None = None  # wall-clock time of the incident's first check (None: older runs)
+    # True: a later check of the person had the items (PPE put back on). False: still missing at
+    # their last check. None: runs made before tracking.
+    resolved: bool | None = None
 
 
 class PersonSummary(BaseModel):
@@ -179,6 +190,8 @@ class RunDetail(BaseModel):
 
 class AppConfig(BaseModel):
     server_key_configured: bool
+    # The server's MOONDREAM_ENDPOINT is Moondream on this machine; an entered key uses Moondream Cloud.
+    server_moondream_local: bool = False
     ppe_items: list[dict]
     defaults: RunOptions
     max_upload_mb: int

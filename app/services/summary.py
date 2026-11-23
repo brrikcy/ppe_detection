@@ -30,6 +30,15 @@ def frame_name(frame: int) -> str:
     return f"{frame:06d}.jpg"
 
 
+CLEAN_SUFFIX = "_clean.jpg"
+
+
+def clean_frame_name(frame_image: str) -> str:
+    """The same frame without boxes, saved next to the annotated one. Runs made before it was
+    saved get it from the input video when it's first requested (routes.runs.get_frame)."""
+    return frame_image.removesuffix(".jpg") + CLEAN_SUFFIX
+
+
 def person_photo_name(track_id: int) -> str:
     return f"{track_id}.jpg"
 
@@ -93,10 +102,15 @@ def _incidents(timeline: list[dict], available_snapshots, available_frames) -> l
         name = frame_name(entry["frame"])
         return name if available_frames is None or name in available_frames else None
 
+    def clean_image(entry):
+        # Wherever there's an annotated frame; older runs' copies are made on request.
+        name = frame_image(entry)
+        return clean_frame_name(name) if name else None
+
     events: list[ViolationEvent] = []
     open_by_person: dict[int, dict] = {}
 
-    def close(tid):
+    def close(tid, resolved):
         inc = open_by_person.pop(tid, None)
         if inc is None:
             return
@@ -105,7 +119,8 @@ def _incidents(timeline: list[dict], available_snapshots, available_frames) -> l
             time_sec=inc["start"], end_sec=inc["end"], checks=inc["checks"], frame=best[0]["frame"],
             track_id=tid, violations=inc["labels"], box=list(best[1]["box"]),
             snapshot=snap(best[0], best[2]) if best[1]["violations"] else None,
-            frame_image=frame_image(best[0])))
+            frame_image=frame_image(best[0]), clean_image=clean_image(best[0]),
+            detected_at=inc["detected_at"], resolved=resolved))
 
     for entry in timeline:
         for i, w in enumerate(entry["workers"]):
@@ -116,22 +131,23 @@ def _incidents(timeline: list[dict], available_snapshots, available_frames) -> l
                 if w["violations"] and state == "violation":
                     events.append(ViolationEvent(time_sec=entry["time_sec"], frame=entry["frame"],
                                                  violations=w["violations"], box=list(w["box"]),
-                                                 snapshot=snap(entry, i), frame_image=frame_image(entry)))
+                                                 snapshot=snap(entry, i), frame_image=frame_image(entry),
+                                                 detected_at=entry.get("detected_at")))
                 continue
             if state not in VERDICTS:
                 continue  # too far, failed or not checked: says nothing either way
             if state != "violation":
-                close(tid)
+                close(tid, resolved=True)  # a verdict without the item missing: PPE back on
                 continue
             inc = open_by_person.setdefault(tid, {"start": entry["time_sec"], "checks": 0, "labels": [],
-                                                  "best": (entry, w, i)})
+                                                  "best": (entry, w, i), "detected_at": entry.get("detected_at")})
             inc["end"] = entry["time_sec"]
             inc["checks"] += 1
             inc["labels"] += [v for v in w.get("shown", w["violations"]) if v not in inc["labels"]]
             if len(w["violations"]) > len(inc["best"][1]["violations"]):
                 inc["best"] = (entry, w, i)
     for tid in list(open_by_person):
-        close(tid)
+        close(tid, resolved=False)  # still missing at the person's last check
     return sorted(events, key=lambda e: (e.time_sec, e.track_id or 0))
 
 

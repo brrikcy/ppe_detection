@@ -30,7 +30,7 @@ BRIGHT = Image.fromarray(np.full((200, 120, 3), 200, np.uint8))  # FakeModel say
     {"items": {"helmet": {"question": "  ", "detect_term": "y"}}},
     {"detector_imgsz": 650},
     {"person_model": "../secrets.pt"},
-    {"person_model": "yolo.onnx"},
+    {"person_model": "yolo.txt"},
     {"vote_window": 0},
     {"crop_padding": 2},
 ])
@@ -48,6 +48,14 @@ def test_missing_items_fall_back_to_defaults_and_changes_are_listed():
     assert set(t.changes()) == {"crop_padding", "items.helmet.question", "items.helmet.detect_term",
                                 "items.helmet.body_part"}
     assert Tuning().changes() == []
+
+
+def test_settings_saved_with_the_retired_mask_item_still_load():
+    old = Tuning().model_dump()
+    old["items"]["mask"] = {"question": "a face mask or respirator", "detect_term": "face mask", "body_part": "face"}
+    old["new_track_thresh"] = 0.3
+    t = Tuning.model_validate(old)
+    assert "mask" not in t.items and t.changes() == ["new_track_thresh"]
 
 
 # ---- effect on the analyzer ------------------------------------------------------
@@ -85,17 +93,61 @@ def test_confirmation_steps_can_be_switched_off():
     # Default: "no" -> detect hard hat (none) -> detect head (found) -> missing
     steps = analyze(Tuning(), Recording())["steps"]
     assert [s["step"] for s in steps if s["step"] != "detect_object"] == ["query", "detect", "detect"]
-    # No confirmation: the "no" alone decides.
+    # No detect for the item: only the body part is looked for.
     out = analyze(Tuning(confirm_no_with_detect=False), Recording())
+    assert out["status"] == "missing" and [s["step"] for s in out["steps"] if s["step"] != "detect_object"] == ["query", "detect"]
+    # Neither: the "no" alone decides.
+    out = analyze(Tuning(confirm_no_with_detect=False, check_body_part=False), Recording())
     assert out["status"] == "missing" and [s["step"] for s in out["steps"]] == ["query"]
 
 
+class NoHead(Recording):
+    def detect(self, image, obj):
+        return {"objects": []}
+
+
 def test_body_part_check_can_be_switched_off():
-    class NoHead(Recording):
-        def detect(self, image, obj):
-            return {"objects": []}
     assert analyze(Tuning(), NoHead())["status"] == "unverified"
     assert analyze(Tuning(check_body_part=False), NoHead())["status"] == "missing"
+
+
+def test_hidden_body_part_is_unverified_without_detect_double_check():
+    # A worker behind a wall: "no goggles", and no face to be found.
+    out = analyze(Tuning(confirm_no_with_detect=False), NoHead(), item="goggles")
+    assert out["status"] == "unverified"
+    assert [s.get("term") for s in out["steps"] if s["step"] == "detect"] == ["face"]
+
+
+class FeetAnswer(Recording):
+    """Says "no" to the boots question; answers the feet question with `feet`. Detect finds anything."""
+
+    def __init__(self, feet):
+        super().__init__()
+        self.feet = feet
+
+    def query(self, image, question):
+        self.questions.append(question)
+        return {"answer": self.feet if "feet" in question else "No."}
+
+    def detect(self, image, obj):
+        return {"objects": [{"x_min": 0.4, "y_min": 0.8, "x_max": 0.5, "y_max": 0.9}]}
+
+
+@pytest.mark.parametrize("feet, status", [("No", "unverified"), ("Not visible", "unverified"), ("Yes", "missing")])
+def test_boots_ask_whether_the_feet_are_visible(feet, status):
+    # A seated worker behind a bin: detect finds a "foot" under the chair, but the feet can't be seen.
+    out = analyze(Tuning(confirm_no_with_detect=False), FeetAnswer(feet), item="boots")
+    assert out["status"] == status
+    assert [s["step"] for s in out["steps"]] == ["query", "body_part"]
+    assert out["steps"][1]["visible"] is (status == "missing")
+
+
+def test_blank_body_part_question_falls_back_to_detect():
+    t = Tuning(confirm_no_with_detect=False, items={"boots": {"body_part_question": " "}})
+    assert t.items["boots"].body_part_question is None
+    out = analyze(t, FeetAnswer("No"), item="boots")
+    assert out["status"] == "missing"  # the detected "foot" counts
+    assert [s.get("term") for s in out["steps"] if s["step"] == "detect"] == ["foot"]
 
 
 def test_min_check_height_and_padding():
@@ -129,7 +181,7 @@ def client(tmp_path):
         return PPEAnalyzer(cfg, model=FakeModel())
 
     app = create_app(Settings(data_dir=tmp_path / "runs", server_api_key="srv"), analyzer_factory=factory,
-                     key_verifier=lambda k: None, people_factory=lambda fps: FakePeople())
+                     key_verifier=lambda k, e: None, people_factory=lambda fps: FakePeople())
     with TestClient(app) as c:
         c.configs, c.tmp = configs, tmp_path
         yield c

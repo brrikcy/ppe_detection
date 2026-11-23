@@ -1,12 +1,15 @@
 """API tests with a fake Moondream model (no network, no API key)."""
 
+import json
 import time
 
 import cv2
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
+from app.api.routes.runs import STREAM_WINDOW
 from app.core.settings import Settings
 from app.main import create_app
 from app.services.keys import KeyRejected
@@ -34,7 +37,7 @@ def client(tmp_path):
         seen_keys.append(config.api_key)
         return PPEAnalyzer(config, model=FakeModel())
 
-    def verify(key):
+    def verify(key, endpoint):
         if key == "bad-key":
             raise KeyRejected("Moondream rejected this API key.")
 
@@ -65,6 +68,27 @@ def test_config_reports_server_key(client):
     body = client.get("/api/config").json()
     assert body["server_key_configured"] is True
     assert {"key": "helmet", "label": "Helmet"} in body["ppe_items"]
+    assert "mask" not in [i["key"] for i in body["ppe_items"]]
+
+
+def test_mask_is_no_longer_offered_but_old_mask_runs_still_load_and_rerun(client, tmp_path):
+    assert _upload(client, tmp_path, required_ppe="helmet,mask").status_code == 422
+    first = _upload(client, tmp_path, required_ppe="helmet", max_seconds="1").json()
+    run_id = first["meta"]["id"]
+    _wait(client, run_id)
+    # Make it look like a run from before mask was removed.
+    meta_path = tmp_path / "runs" / run_id / "meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["options"]["required_ppe"] = ["helmet", "mask"]
+    meta["options"]["tuning"]["items"]["mask"] = {"question": "a face mask", "detect_term": "face mask"}
+    meta_path.write_text(json.dumps(meta))
+
+    assert client.get(f"/api/runs/{run_id}").json()["meta"]["options"]["required_ppe"] == ["helmet", "mask"]
+    assert run_id in [r["id"] for r in client.get("/api/runs").json()]
+    r = client.post(f"/api/runs/{run_id}/rerun", json={"settings": "original"})
+    assert r.status_code == 201, r.text
+    again = _wait(client, r.json()["meta"]["id"])
+    assert again["meta"]["status"] == "completed" and again["meta"]["options"]["required_ppe"] == ["helmet"]
 
 
 def test_full_run_lifecycle(client, tmp_path):
@@ -214,3 +238,64 @@ def test_rerun_copies_the_video_and_chooses_the_settings(client, tmp_path):
     assert client.post(f"/api/runs/{again['meta']['id']}/rerun", json={"api_key": "bad-key"}).status_code == 401
     assert client.post(f"/api/runs/{again['meta']['id']}/rerun", json={"settings": "other"}).status_code == 422
     assert client.post("/api/runs/nope/rerun", json={}).status_code == 404
+
+
+def _start_live_run(client, tmp_path) -> str:
+    r = _upload(client, tmp_path, required_ppe="helmet", live="true")
+    assert r.status_code == 201, r.text
+    run_id = r.json()["meta"]["id"]
+    assert r.json()["meta"]["options"]["live"] is True
+
+    deadline = time.time() + 10
+    while (m := client.get(f"/api/runs/{run_id}").json()["meta"])["progress"]["frames_done"] == 0:
+        assert m["status"] != "completed" and time.time() < deadline  # 25 frames at 10 fps take 2.5 s
+        time.sleep(0.05)
+    return run_id
+
+
+def test_live_run_streams_frames(client, tmp_path):
+    run_id = _start_live_run(client, tmp_path)
+    frames = []
+    with client.websocket_connect(f"/api/runs/{run_id}/live") as ws:  # closes with the run
+        with pytest.raises(WebSocketDisconnect):
+            while True:
+                frames.append(ws.receive_bytes())
+                ws.send_text("ok")
+    assert len(frames) > 3
+    assert all(f.startswith(b"\xff\xd8") for f in frames)  # JPEG data
+
+    assert _wait(client, run_id)["meta"]["status"] == "completed"
+    with pytest.raises(WebSocketDisconnect):  # finished: no stream
+        with client.websocket_connect(f"/api/runs/{run_id}/live"):
+            pass
+
+
+def test_live_stream_waits_for_the_browser(client, tmp_path):
+    # Unanswered frames stop the stream, so a slow connection skips frames instead of queueing them.
+    run_id = _start_live_run(client, tmp_path)
+    with client.websocket_connect(f"/api/runs/{run_id}/live") as ws:
+        frames = [ws.receive_bytes() for _ in range(STREAM_WINDOW)]
+        assert _wait(client, run_id)["meta"]["status"] == "completed"  # nothing more was sent meanwhile
+        for _ in frames:
+            ws.send_text("ok")
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_bytes()
+
+
+def test_violation_frames_have_a_copy_without_boxes(client, tmp_path):
+    run_id = _upload(client, tmp_path, required_ppe="helmet").json()["meta"]["id"]
+    [inc] = _wait(client, run_id)["summary"]["events"]
+    clean = tmp_path / "runs" / run_id / "frames" / inc["clean_image"]
+
+    def red_pixels(r):
+        img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
+        return int(((img[:, :, 2] > 150) & (img[:, :, 1] < 90) & (img[:, :, 0] < 90)).sum())
+
+    framed = client.get(f"/api/runs/{run_id}/frames/{inc['frame_image']}")
+    assert red_pixels(framed) > 100  # the violation box is drawn on the annotated frame
+    assert clean.exists() and red_pixels(client.get(f"/api/runs/{run_id}/frames/{clean.name}")) == 0
+
+    clean.unlink()  # a run made before the copy was saved: it's made from the input video
+    r = client.get(f"/api/runs/{run_id}/frames/{clean.name}")
+    assert r.status_code == 200 and red_pixels(r) == 0 and clean.exists()
+    assert client.get(f"/api/runs/{run_id}/frames/999999_clean.jpg").status_code == 404  # not a violation frame

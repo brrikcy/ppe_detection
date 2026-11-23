@@ -20,7 +20,8 @@ class Settings:
     server_api_key: str | None  # fallback when the form leaves the key empty
     max_upload_mb: int = 1024
     person_model: Path | None = None  # YOLO weights for person tracking; None = models/yolo11s.pt
-    moondream_endpoint: str = DEFAULT_ENDPOINT  # where Moondream requests (and the API key) are sent
+    moondream_endpoint: str = DEFAULT_ENDPOINT  # where Moondream requests (and the server's API key) are sent
+    cloud_endpoint: str = DEFAULT_ENDPOINT  # where requests with a key entered in the form are sent
     warm_up_detector: bool = False  # load the person detector at startup (the real server does)
 
     @classmethod
@@ -33,5 +34,6 @@ class Settings:
             person_model=(PROJECT_ROOT / os.environ["PERSON_MODEL"]).resolve()
             if os.getenv("PERSON_MODEL") else None,
             moondream_endpoint=endpoint_from_env(),
+            cloud_endpoint=endpoint_from_env("MOONDREAM_CLOUD_ENDPOINT"),
             warm_up_detector=True,
         )

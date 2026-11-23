@@ -17,12 +17,12 @@ from pydantic import ValidationError
 from ppe.config import PPE_CATALOG, Config
 from ppe.moondream_client import AuthError, ModelError
 from ppe.people import DEFAULT_MODEL, MODELS_DIR
-from ppe.tuning import Tuning
+from ppe.tuning import MODEL_SUFFIXES, Tuning
 
 from ...core.settings import Settings
 from ...schemas.runs import TryRequestResult, TuningState
 from ...services.dev_settings import DevSettingsStore
-from ...services.keys import MissingKey, resolve_key
+from ...services.keys import MissingKey, endpoint_for, resolve_key
 from ...services.run_store import RunNotFound, RunStore
 from ...services.runner import RunRunner
 from ...services.summary import snapshot_name
@@ -40,7 +40,7 @@ def _state(active: Tuning, settings: Settings) -> TuningState:
         active=active,
         defaults=Tuning(),
         changes=active.changes(),
-        models=sorted(p.name for p in MODELS_DIR.glob("*.pt")) if MODELS_DIR.exists() else [],
+        models=sorted(p.name for p in MODELS_DIR.iterdir() if p.suffix in MODEL_SUFFIXES) if MODELS_DIR.exists() else [],
         default_model=Path(settings.person_model or DEFAULT_MODEL).name,
         moondream_endpoint=settings.moondream_endpoint,
     )
@@ -132,7 +132,7 @@ async def try_prompt(
     except (ValidationError, ValueError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Invalid settings: {exc}")
     try:
-        key, _ = resolve_key(api_key, settings)
+        key, key_source = resolve_key(api_key, settings)
     except MissingKey as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
 
@@ -163,7 +163,7 @@ async def try_prompt(
         note = "Checked on this image alone: the whole image is the worker, with no neighbours."
 
     analyzer = runner.analyzer_factory(Config(api_key=key, required_ppe=[item], tuning=tun,
-                                              moondream_endpoint=settings.moondream_endpoint))
+                                              moondream_endpoint=endpoint_for(key_source, settings)))
     try:
         result = await run_in_threadpool(analyzer.explain_item, img, item, box, others)
     except AuthError:

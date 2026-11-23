@@ -1,10 +1,10 @@
-// Developer options: tune Moondream prompts, decision rules, requests and tracking,
-// and try a prompt on one worker image before saving.
+// Developer options: the Moondream API key, tune Moondream prompts, decision rules, requests
+// and tracking, and try a prompt on one worker image before saving.
 
-import { api } from "../api.js";
+import { api, apiKey } from "../api.js";
 import { fmt, h } from "../ui.js";
 
-const ITEM_LABELS = { helmet: "Helmet", vest: "Vest", gloves: "Gloves", boots: "Boots", goggles: "Goggles", mask: "Mask" };
+const ITEM_LABELS = { helmet: "Helmet", vest: "Vest", gloves: "Gloves", boots: "Boots", goggles: "Goggles" };
 
 // Settings that only matter when another one is on: return why a field is unused, or null.
 const NO_CHECK = "Double-check “no” answers with detect";
@@ -13,8 +13,7 @@ const offUnless = (key, label) => (d) => (d[key] ? null : `Not used while “${l
 // Detected boxes are judged by both double-checks.
 const usesDetect = (d) => (d.confirm_no_with_detect || d.confirm_yes_on_overlap ? null
   : `Not used while “${NO_CHECK}” and “${YES_CHECK}” are both off.`);
-const usesBodyPart = (d) => (!d.confirm_no_with_detect ? `Not used while “${NO_CHECK}” is off.`
-  : !d.check_body_part ? "Not used while “Unverified when the body part can't be seen” is off." : null);
+const usesBodyPart = (d) => (d.check_body_part ? null : "Not used while “Unverified when the body part can't be seen” is off.");
 const usesVerify = (d) => usesDetect(d) ?? (d.verify_detected_box ? null : "Not used while “Re-ask about the detected box” is off.");
 
 const f = (key, type, label, hint, extra = {}) => ({ key, type, label, hint, ...extra });
@@ -32,10 +31,9 @@ const CARDS = [
       ] },
       { title: "When Moondream says “no”", fields: [
         f("confirm_no_with_detect", "toggle", NO_CHECK,
-          "A “no” only counts if detect can't find the item on this worker. Off: fewer calls per “no”, more false alarms."),
+          "A “no” only counts if detect can't find the item on this worker. Off: fewer calls per “no”, and no item found by mistake, but a “no” about a visible worker always counts."),
         f("check_body_part", "toggle", "Unverified when the body part can't be seen",
-          "If the head (for a helmet) isn't visible, the item is unverified instead of missing.",
-          { child: true, dependsOn: offUnless("confirm_no_with_detect", NO_CHECK) }),
+          "If the head (helmet), face (goggles), hands (gloves) or feet (boots) can't be seen on the worker, the item is unverified instead of missing. One call per “no”, with or without the double-check above: detect looks for the body part, or Moondream is asked if the item has a body part question (boots)."),
       ] },
       { title: "When Moondream says “yes”", fields: [
         f("confirm_yes_on_overlap", "toggle", YES_CHECK,
@@ -109,7 +107,7 @@ const CARDS = [
     intro: "YOLO finds people on every frame; BoT-SORT keeps their IDs.",
     groups: [
       { title: "Finding people", fields: [
-        f("person_model", "model", "Detection model", "Bigger models find more partly hidden workers but are slower. Put .pt files in models/."),
+        f("person_model", "model", "Detection model", "Bigger models find more partly hidden workers but are slower. Put .pt, .engine (TensorRT) or .onnx files in models/."),
         f("detect_fps", "number", "Detect people",
           "How often the person detector runs; in between, boxes move on at their last speed. The detector is the slowest part of a run: 10 a second is about 3× faster than every frame of a 30 fps video. 0 = every frame.",
           { min: 0, max: 60, step: 1, unit: "times a second" }),
@@ -119,8 +117,9 @@ const CARDS = [
           { min: 0.01, max: 0.9, step: 0.01 }),
       ] },
       { title: "Keeping IDs", fields: [
-        f("new_track_thresh", "number", "Confidence to start a new person",
-          "Lower tracks more hard-to-see workers but creates more short, spurious IDs.", { min: 0.05, max: 0.95, step: 0.05 }),
+        f("new_track_thresh", "number", "Alpha",
+          "Confidence a detection needs to start a new person. Lower tracks more hard-to-see workers but creates more short, spurious IDs. Also set on the New inspection page.",
+          { min: 0.05, max: 0.95, step: 0.05 }),
         f("min_track_age_sec", "number", "Ignore tracks younger than",
           "Filters flicker: a track must last this long before its box is drawn. Checks wait longer (see “Check a new person after”).",
           { min: 0, max: 3, step: 0.1, unit: "s" }),
@@ -145,7 +144,10 @@ const ITEM_ROWS = [
   { key: "question", type: "textarea", label: "Wording", hint: "Replaces {item} in the question template." },
   { key: "detect_term", type: "text", label: "Detect term",
     hint: "What detect looks for to overrule a “no”, or to confirm a “yes” when workers overlap.", dependsOn: usesDetect },
-  { key: "body_part", type: "text", label: "Body part", hint: "If detect can't find it on the worker, the item is unverified. Blank = no check.",
+  { key: "body_part", type: "text", label: "Body part", hint: "If detect can't find it on the worker, the item is unverified. Blank = no check. Not used when there is a body part question.",
+    dependsOn: usesBodyPart, blankIsNull: true },
+  { key: "body_part_question", type: "textarea", label: "Body part question",
+    hint: "Asked about the worker instead of detecting the body part: anything but “yes” makes the item unverified. For feet, because detect finds “feet” under chairs and behind walls. Blank = use detect.",
     dependsOn: usesBodyPart, blankIsNull: true },
   { pair: true, label: "Region", hint: "Where on the worker the item may be, as a share of the box height from the top (negative = above the box).",
     dependsOn: usesDetect, parts: [["region_top", "top", -0.5, 1.5, 0.05], ["region_bottom", "bottom", -0.5, 1.5, 0.05]] },
@@ -401,11 +403,16 @@ export async function renderDev(root) {
   const settingCards = CARDS.map((c) => card(c.id, c.title, c.intro,
     c.endpointNote ? h("p", { class: "endpoint-note" },
       "Endpoint: ", h("code", {}, state.moondream_endpoint),
-      h("span", { class: "hint" }, " · set MOONDREAM_ENDPOINT in the server's .env to use another provider or a self-hosted server")) : null,
+      h("span", { class: "hint" }, " · set MOONDREAM_ENDPOINT in the server's .env to use another provider or a self-hosted server."
+        + " A key entered in a form always uses Moondream Cloud.")) : null,
     c.endpointNote ? h("datalist", { id: "md-models" },
       ["moondream3.1-9B-A2B", "moondream3-preview"].map((m) => h("option", { value: m }))) : null,
     ...c.groups.map((g) => group(g, (s) => setting(s)))));
   const cards = { rules: settingCards[0], voting: settingCards[1], requests: settingCards[2], tracking: settingCards[3] };
+
+  // ---- Moondream access ------------------------------------------------------------
+  const accessCard = await buildAccess();
+  accessCard.id = "dev-access";
 
   // ---- playground ----------------------------------------------------------------
   const playground = await buildPlayground(() => draft);
@@ -446,11 +453,11 @@ export async function renderDev(root) {
     controls.push({ refresh: refreshCount });
     return { id, body, setOpen };
   }
-  const sections = [playground, promptCard, itemsCard, cards.rules, cards.voting, cards.requests, cards.tracking]
+  const sections = [accessCard, playground, promptCard, itemsCard, cards.rules, cards.voting, cards.requests, cards.tracking]
     .map(collapsible);
 
   const nav = h("nav", { class: "dev-nav", "aria-label": "Sections" },
-    [["playground", "Playground"], ["prompts", "Prompts"], ["items", "PPE items"], ["rules", "Decision rules"],
+    [["access", "Access"], ["playground", "Playground"], ["prompts", "Prompts"], ["items", "PPE items"], ["rules", "Decision rules"],
       ["voting", "Status and voting"], ["requests", "Requests"], ["tracking", "Tracking"]]
       .map(([id, label]) => h("button", { type: "button", onclick: () => {
         sections.find((x) => x.id === id)?.setOpen(true);
@@ -483,6 +490,7 @@ export async function renderDev(root) {
       h("div", { class: "actions" }, viewSwitch, resetBtn)),
     h("div", { class: "dev-bar" }, nav, h("div", { class: "actions" }, dirtyPill, discardBtn, saveBtn)),
     errorBox,
+    accessCard,
     playground,
     promptCard,
     itemsCard,
@@ -491,6 +499,60 @@ export async function renderDev(root) {
   setView(view);
   refreshBar();
   return () => {};
+}
+
+// ---- Moondream access ------------------------------------------------------------
+// The API key for new runs, re-runs and the playground. It stays in this browser tab
+// (see apiKey in api.js) and is sent with each request; the server never stores it.
+async function buildAccess() {
+  const config = await api.config();
+  const local = config.server_key_configured && config.server_moondream_local;
+  const input = h("input", { id: "dev-key", class: "input", type: "password", autocomplete: "off", value: apiKey.get(),
+    placeholder: local ? "Leave empty to use this server's GPU"
+      : config.server_key_configured ? "Leave empty to use the server key" : "Paste your Moondream API key" });
+  const status = h("div", { class: "key-status", "aria-live": "polite" });
+  const showBtn = h("button", { type: "button", class: "btn", onclick: () => {
+    input.type = input.type === "password" ? "text" : "password";
+    showBtn.textContent = input.type === "password" ? "Show" : "Hide";
+  } }, "Show");
+  const describe = () => {
+    status.className = "key-status";
+    status.textContent = apiKey.get() ? "Saved for this browser tab. New runs use Moondream Cloud with this key."
+      : local ? "No key entered: runs use Moondream on this server's GPU."
+      : config.server_key_configured ? "No key entered: runs use the key in the server's .env."
+      : "No key entered, and the server has none: runs can't start until one is added.";
+  };
+  input.addEventListener("input", () => { apiKey.set(input.value); describe(); });
+  const testBtn = h("button", { type: "button", class: "btn", onclick: async () => {
+    testBtn.disabled = true;
+    status.className = "key-status";
+    status.textContent = "Checking with Moondream…";
+    try {
+      const r = await api.checkKey(apiKey.get());
+      status.className = `key-status ${r.ok ? "ok" : "bad"}`;
+      status.textContent = !r.ok ? r.message
+        : r.source === "form" ? `${r.message} Runs will use Moondream Cloud with the entered key.`
+        : local ? r.message : `${r.message} Using the server's key.`;
+    } catch (e) {
+      status.className = "key-status bad";
+      status.textContent = e.message;
+    } finally {
+      testBtn.disabled = false;
+    }
+  } }, "Test key");
+  describe();
+  return h("section", { class: "card card-pad dev-card" },
+    h("div", { class: "card-head" }, h("div", {},
+      h("h2", {}, "Moondream access"),
+      h("p", {}, "The API key used for new inspections, re-runs and the playground. It is kept in this browser tab until you close it, and never saved on the server."))),
+    h("div", { class: "field" },
+      h("label", { class: "label", for: "dev-key" }, "Moondream API key"),
+      h("div", { class: "input-row" }, input, showBtn, testBtn),
+      h("div", { class: "hint" }, local
+        ? "Optional. If empty, Moondream runs on this server's GPU. With a key, runs use Moondream Cloud."
+        : config.server_key_configured ? "Optional. If empty, the key in the server's .env is used."
+        : "Required: the server has no key in its .env."),
+      status));
 }
 
 // ---- prompt playground ------------------------------------------------------------
@@ -509,8 +571,6 @@ async function buildPlayground(getDraft) {
   } });
   const itemSelect = h("select", { class: "input", id: "pg-item" },
     Object.entries(ITEM_LABELS).map(([k, v]) => h("option", { value: k }, v)));
-  const keyInput = h("input", { class: "input", id: "pg-key", type: "password", autocomplete: "off",
-    placeholder: "Moondream key (empty = server key)" });
   const runBtn = h("button", { class: "btn btn-primary", type: "button", disabled: true, onclick: runTest }, "Run test");
   const result = h("div", { class: "pg-result" }, h("p", { class: "hint" }, "Pick a worker image, choose an item and run the test. Unsaved changes are used."));
 
@@ -546,7 +606,7 @@ async function buildPlayground(getDraft) {
     const form = new FormData();
     form.append("item", itemSelect.value);
     form.append("tuning", JSON.stringify(getDraft()));
-    if (keyInput.value.trim()) form.append("api_key", keyInput.value.trim());
+    if (apiKey.get()) form.append("api_key", apiKey.get());
     if (pick.file) form.append("image", pick.file);
     else { form.append("run_id", pick.run_id); form.append("folder", pick.folder); form.append("name", pick.name); }
     runBtn.disabled = true;
@@ -579,6 +639,9 @@ async function buildPlayground(getDraft) {
       } else if (s.step === "verify") {
         steps.push(h("li", {}, h("b", {}, "Re-check: "), h("q", {}, s.question), " → ",
           h("code", {}, JSON.stringify(s.answer)), s.confirmed ? " (confirmed)" : " (not confirmed)"));
+      } else if (s.step === "body_part") {
+        steps.push(h("li", {}, h("b", {}, "Body part: "), h("q", {}, s.question), " → ",
+          h("code", {}, JSON.stringify(s.answer)), s.visible ? " (visible)" : " (not visible, so unverified)"));
       } else if (s.step === "detect") {
         steps.push(h("li", {}, h("b", {}, `Detect “${s.term}”: `),
           `${s.found} found${s.found ? `, ${s.on_worker ? "one counts for this worker" : "none counts"}` : ""}`));
@@ -613,8 +676,8 @@ async function buildPlayground(getDraft) {
         thumbs,
         h("label", { class: "btn", for: "pg-upload", style: "justify-self:start" }, "Or upload an image"), upload,
         h("div", { class: "pg-controls" },
-          h("label", { class: "label", for: "pg-item" }, "Item"), itemSelect,
-          h("label", { class: "label", for: "pg-key" }, "API key"), keyInput),
+          h("label", { class: "label", for: "pg-item" }, "Item"), itemSelect),
+        h("p", { class: "hint" }, "Uses the key under Moondream access, or the server's key if none is entered."),
         runBtn),
       result));
   runSelect.id = "pg-run";

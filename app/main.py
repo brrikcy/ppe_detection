@@ -60,7 +60,7 @@ def create_app(settings: Settings | None = None,
     app.state.dev_settings = dev = DevSettingsStore(settings.data_dir)
     # By default the key is checked against the endpoint and model that runs will use.
     app.state.verify_key = key_verifier or (
-        lambda key: verify_key(key, settings.moondream_endpoint, dev.get().moondream_model))
+        lambda key, endpoint: verify_key(key, endpoint, dev.get().moondream_model))
     app.state.runner = RunRunner(store, analyzer_factory, people_factory=people_factory,
                                  person_model=settings.person_model,
                                  moondream_endpoint=settings.moondream_endpoint)

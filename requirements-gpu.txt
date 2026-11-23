@@ -1,0 +1,7 @@
+# Extras for a GPU server running Moondream locally (see README, "Live demo on a GPU").
+# Install with: pip install -r requirements.txt -r requirements-gpu.txt
+# Photon: Moondream's local engine, the same moondream3.1-9B-A2B model as Moondream Cloud.
+# Needs an NVIDIA Ampere or newer GPU (A10G, L4, L40S, A100), not a T4.
+moondream>=2.6.1
+# Only for `python -m moondream_server.serve --backend hf` (if Photon won't install):
+# transformers accelerate

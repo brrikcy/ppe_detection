@@ -279,8 +279,62 @@ def test_slow_moondream_gives_the_same_report(tmp_path):
         reports.append(process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: FakePeople(schedule)))
         a.close()
     fast, slow = reports
-    assert slow["timeline"] == fast["timeline"] and slow["frames_written"] == fast["frames_written"] == 40
+    # detected_at is the wall-clock time of each check, so it differs; everything else must not.
+    timeline = lambda r: [{k: v for k, v in e.items() if k != "detected_at"} for e in r["timeline"]]  # noqa: E731
+    assert all(e["detected_at"] for r in reports for e in r["timeline"])
+    assert timeline(slow) == timeline(fast) and slow["frames_written"] == fast["frames_written"] == 40
     assert [e["frame"] for e in fast["timeline"]] == [0, 5, 10, 15, 20, 25, 30, 35]
+
+
+def test_live_mode_does_not_wait_for_moondream(tmp_path):
+    """Live mode plays at the video's speed: a check that takes longer than the label delay
+    doesn't hold the video back, checks don't pile up, and late results are still recorded."""
+    import threading
+    import time
+
+    gate = threading.Event()  # Moondream answers nothing until frame 30 has been shown
+
+    class Stuck(FakeModel):
+        def query(self, image, question):
+            gate.wait(timeout=10)
+            return super().query(image, question)
+
+    src = write_video(tmp_path / "in.mp4", frames=50, fps=25)
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0, analysis_interval_sec=0.4), model=Stuck())
+    start = time.monotonic()
+    report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: FakePeople(),
+                           on_frame=lambda i, img: gate.set() if i >= 30 else None,
+                           live=True, max_label_delay_sec=0.1)
+    elapsed = time.monotonic() - start
+    a.close()
+
+    assert report["frames_written"] == 50
+    assert 1.8 <= elapsed < 8  # 50 frames at 25 fps; never waited for the stuck model's 10 s timeout
+    frames = [e["frame"] for e in report["timeline"]]
+    assert frames[:2] == [0, 10] and 20 not in frames  # 20 skipped: two checks still out
+    assert frames == sorted(frames)
+    right = [w for w in report["timeline"][1]["workers"] if w["track_id"] == 2][0]
+    assert right["violations"] == ["No Helmet", "No Vest"] and right["shown"] == ["No Helmet", "No Vest"]
+
+
+def test_writer_error_stops_the_run(tmp_path):
+    src = write_video(tmp_path / "in.mp4")
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0), model=FakeModel())
+    out = tmp_path / "out.mp4"
+
+    def broken(i, img):
+        if i == 5:
+            raise OSError("disk full")
+
+    try:
+        process_video(src, out, a, people_factory=lambda fps: FakePeople(), on_frame=broken)
+    except OSError as exc:
+        assert str(exc) == "disk full"
+    else:
+        raise AssertionError("the writer's error was swallowed")
+    finally:
+        a.close()
+    assert not out.exists() and not out.with_suffix(".json").exists()
 
 
 def test_frame_reader_matches_opencv(tmp_path, monkeypatch):
@@ -302,3 +356,31 @@ def test_frame_reader_matches_opencv(tmp_path, monkeypatch):
         r.close()
         cap.release()
         assert n == 12 and (r.width, r.height) == (400, 200)
+
+
+def test_frame_reader_scales_tall_video_down(tmp_path, monkeypatch):
+    import ppe.media as media
+
+    src = write_video(tmp_path / "in.mp4", frames=5)  # 400x200
+    for use_ffmpeg in (True, False):
+        if not use_ffmpeg:
+            monkeypatch.setattr(media, "find_ffmpeg", lambda: None)
+        r = media.FrameReader(src, max_height=100)
+        frames = []
+        while (f := r.read()) is not None:
+            frames.append(f)
+        r.close()
+        assert (r.width, r.height) == (200, 100) and len(frames) == 5
+        assert all(f.shape == (100, 200, 3) for f in frames)
+        assert frames[0][:, 100:].mean() > 150 > frames[0][:, :100].mean()  # right half still bright
+    assert media.FrameReader(src, max_height=1080).height == 200  # never scaled up
+
+
+def test_on_start_reports_the_size_boxes_are_measured_in(tmp_path):
+    sizes = []
+    src = write_video(tmp_path / "in.mp4", frames=10)
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0, min_check_age_sec=0), model=FakeModel())
+    report = process_video(src, tmp_path / "out.mp4", a, people_factory=lambda fps: FakePeople(),
+                           on_start=lambda w, h: sizes.append((w, h)))
+    a.close()
+    assert sizes == [(report["width"], report["height"])]

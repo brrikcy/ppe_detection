@@ -152,7 +152,8 @@ class FrameReader:
 
     MAX_MEAN_DIFF = 8.0  # per pixel, 0-255; compression differences between decoders are ~1
 
-    def __init__(self, src: Path):
+    def __init__(self, src: Path, max_height: int | None = None):
+        """With `max_height`, taller video is scaled down to it while decoding (e.g. 4K to 1080p)."""
         self.src = str(src)
         cap = cv2.VideoCapture(self.src)
         if not cap.isOpened():
@@ -163,15 +164,21 @@ class FrameReader:
         cap.release()
         if not ok:
             raise RuntimeError(f"No frames could be decoded from {src}")
+        self._size = None  # (width, height) frames are scaled to, if smaller than the video
+        if max_height and first.shape[0] > max_height:
+            h, w = first.shape[:2]
+            self._size = (max(2, round(w * max_height / h / 2) * 2), max_height)
+            first = cv2.resize(first, self._size, interpolation=cv2.INTER_AREA)
         self.height, self.width = first.shape[:2]
         self._frame_bytes = self.width * self.height * 3
         self._proc = self._cap = None
         self._pending = None  # first ffmpeg frame, already read for the comparison
         ffmpeg = find_ffmpeg()
         if ffmpeg:
+            scale = ["-vf", f"scale={self._size[0]}:{self._size[1]}:flags=area"] if self._size else []
             self._proc = subprocess.Popen(
                 [ffmpeg, "-loglevel", "error", "-nostdin", "-threads", "0", "-i", self.src, "-map", "0:v:0",
-                 "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"],
+                 *scale, "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=self._frame_bytes * 2)
             frame = self._read_ffmpeg()
             if frame is None or float(cv2.absdiff(frame, first).mean()) > self.MAX_MEAN_DIFF:
@@ -195,6 +202,8 @@ class FrameReader:
         """The next frame, or None at the end of the video."""
         if self._cap is not None:
             ok, frame = self._cap.read()
+            if ok and self._size:
+                frame = cv2.resize(frame, self._size, interpolation=cv2.INTER_AREA)
             return frame if ok else None
         if self._pending is not None:
             frame, self._pending = self._pending, None

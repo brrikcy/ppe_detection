@@ -48,6 +48,11 @@ export const fmt = {
   dateTime(iso) {
     return new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   },
+  // Full date and time to the second, e.g. "10/24/2026, 12:00:46 PM".
+  stamp(iso) {
+    return new Date(iso).toLocaleString(undefined, { year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  },
 };
 
 export function plural(n, word) {

@@ -3,6 +3,7 @@
 import time
 
 import pytest
+import requests
 from fastapi.testclient import TestClient
 from PIL import Image
 from pydantic import ValidationError
@@ -10,7 +11,7 @@ from pydantic import ValidationError
 import app.main as main_mod
 from app.core.settings import Settings
 from app.main import create_app
-from app.services.keys import ModelRejected
+from app.services.keys import ModelRejected, MoondreamUnreachable, verify_key
 from ppe.analyzer import PPEAnalyzer
 from ppe.config import endpoint_from_env
 from ppe.moondream_client import DEFAULT_MODEL, AuthError, ModelError, MoondreamCloud
@@ -89,6 +90,8 @@ def test_endpoint_from_env(monkeypatch):
     monkeypatch.setenv("MOONDREAM_ENDPOINT", "localhost:2020")
     with pytest.raises(ValueError):
         endpoint_from_env()
+    monkeypatch.setenv("MOONDREAM_CLOUD_ENDPOINT", "https://other.test/v1")
+    assert endpoint_from_env("MOONDREAM_CLOUD_ENDPOINT") == "https://other.test/v1"
 
 
 def test_analyzer_builds_client_with_endpoint_and_model():
@@ -125,7 +128,7 @@ def test_default_key_check_uses_configured_endpoint_and_saved_model(tmp_path, mo
 
 
 def test_rejected_model_refuses_the_run(tmp_path):
-    def verify(key):
+    def verify(key, endpoint):
         raise ModelRejected("The Moondream endpoint doesn't accept model 'x'. Change it in Developer options.")
     app = make_app(tmp_path, key_verifier=verify)
     with TestClient(app) as c:
@@ -144,7 +147,7 @@ def test_model_error_mid_run_fails_with_clear_message_and_runs_record_endpoint(t
     def factory(cfg):
         configs.append(cfg)
         return PPEAnalyzer(cfg, model=Rejects())
-    app = make_app(tmp_path, key_verifier=lambda k: None, analyzer_factory=factory)
+    app = make_app(tmp_path, key_verifier=lambda k, e: None, analyzer_factory=factory)
     with TestClient(app) as c:
         rid = upload(c, tmp_path).json()["meta"]["id"]
         for _ in range(200):
@@ -155,3 +158,49 @@ def test_model_error_mid_run_fails_with_clear_message_and_runs_record_endpoint(t
     assert m["status"] == "failed" and "moondream3.1-9B-A2B" in m["error"] and "Developer options" in m["error"]
     assert m["moondream_endpoint"] == "https://self-hosted.test/v1"
     assert configs[0].moondream_endpoint == "https://self-hosted.test/v1"
+
+
+def test_entered_key_uses_moondream_cloud_and_server_key_uses_server_endpoint(tmp_path):
+    checked, configs = [], []
+
+    def factory(cfg):
+        configs.append(cfg)
+        return PPEAnalyzer(cfg, model=FakeModel())
+    app = make_app(tmp_path, key_verifier=lambda k, e: checked.append((k, e)), analyzer_factory=factory)
+    with TestClient(app) as c:
+        v = write_video(tmp_path / "v.mp4")
+        with v.open("rb") as f:
+            entered = c.post("/api/runs", files={"video": ("v.mp4", f, "video/mp4")}, data={"api_key": "mine"})
+        server = upload(c, tmp_path)
+        assert c.post("/api/key/check", data={"api_key": "mine"}).json()["ok"] is True
+        for _ in range(200):
+            if all(r["status"] in ("completed", "failed") for r in c.get("/api/runs").json()):
+                break
+            time.sleep(0.05)
+    assert entered.json()["meta"]["moondream_endpoint"] == "https://api.moondream.ai/v1"
+    assert server.json()["meta"]["moondream_endpoint"] == "https://self-hosted.test/v1"
+    assert checked == [("mine", "https://api.moondream.ai/v1"), ("srv", "https://self-hosted.test/v1"),
+                       ("mine", "https://api.moondream.ai/v1")]
+    assert sorted((cfg.api_key, cfg.moondream_endpoint) for cfg in configs) == [
+        ("mine", "https://api.moondream.ai/v1"), ("srv", "https://self-hosted.test/v1")]
+
+
+def test_local_moondream_is_checked_by_health_not_by_a_query(sent, monkeypatch):
+    gets = []
+
+    class Ok:
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr("requests.get", lambda url, timeout=None: gets.append(url) or Ok())
+    verify_key("local", "http://127.0.0.1:2020/v1")
+    assert gets == ["http://127.0.0.1:2020/health"] and sent == []  # nothing waited for the GPU
+
+    def down(url, timeout=None):
+        raise requests.ConnectionError("refused")
+    monkeypatch.setattr("requests.get", down)
+    with pytest.raises(MoondreamUnreachable):
+        verify_key("local", "http://localhost:2020/v1")
+
+    verify_key("k", "https://self-hosted.test/v1")
+    assert sent[0][0] == "https://self-hosted.test/v1/query"

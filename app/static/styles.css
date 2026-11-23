@@ -679,3 +679,33 @@ th.is-sorted .det-sort-btn, th.is-sorted .det-sort-icon { color: var(--fg); }
   .lw-overlay, .lw-panel, .lw-img, .lw-bar > i, .lw-chip-bar i { transition: none; }
   .lw-bar > i::after, .lw-flash.is-on, .lw-card.is-new, .lw-card.is-new .lw-card-btn, .lw-chip-dot { animation: none; }
 }
+
+/* ---------- person detection playground ---------- */
+.ppg-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 20px; align-items: start; }
+.ppg-side { display: grid; gap: 20px; min-width: 0; }
+.ppg-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.ppg-or { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ppg-video { width: 100%; max-height: 420px; border-radius: var(--r); background: #000; }
+.ppg-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin: 14px 0 18px; }
+.ppg-stat { display: grid; gap: 2px; padding: 10px 12px; border-radius: var(--r); background: var(--surface-2); }
+.ppg-stat b { font: 600 24px/1.1 var(--display); }
+.ppg-stat span { font-size: 12.5px; color: var(--fg-2); }
+.ppg-stat small { font-size: 11.5px; color: var(--muted); }
+.ppg-stat.is-good b { color: var(--good); }
+.ppg-stat.is-warn b { color: var(--warning); }
+.ppg-spark { width: 100%; height: 70px; margin-bottom: 14px; }
+.ppg-spark rect { fill: var(--info); }
+.ppg-scroll { overflow-x: auto; max-height: 360px; overflow-y: auto; }
+.ppg-table { min-width: 0; }
+.ppg-changed { font: 12px var(--mono); color: var(--fg-2); min-width: 200px; overflow-wrap: anywhere; }
+.ppg-link { font-weight: 600; text-align: left; }
+.ppg-actions { white-space: nowrap; display: flex; gap: 12px; }
+/* Half-width column: label and hint above the control. */
+.ppg-form .set-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.ppg-form .set-row:not(.is-toggle) .set-control { justify-content: flex-start; }
+.ppg-form .set-row.is-toggle { grid-template-columns: minmax(0, 1fr) auto; }
+@media (max-width: 1100px) { .ppg-grid { grid-template-columns: minmax(0, 1fr); } }
+.ppg-fold { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ppg-fold .fold-toggle { font: inherit; letter-spacing: inherit; text-transform: inherit; }
+.ppg-fold .fold-count { text-transform: none; letter-spacing: 0; }
+.ppg-bar .fold-all { color: var(--info); }

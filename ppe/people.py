@@ -91,6 +91,17 @@ class TrackedPerson:
     coasting: bool = False  # not detected this frame; last known box (drawn, never checked)
 
 
+def tracker_from_tuning(tun, fps: float, default_model: Path | None = None) -> "YoloPersonTracker":
+    """The person tracker a run uses for these settings (`tun` is a ppe.tuning.Tuning)."""
+    model = MODELS_DIR / tun.person_model if tun.person_model else Path(default_model or DEFAULT_MODEL)
+    return YoloPersonTracker(fps=fps, model_path=model, imgsz=tun.detector_imgsz,
+                             conf=tun.detector_conf, hidden_sec=tun.hidden_sec,
+                             min_age_sec=tun.min_track_age_sec, coast_sec=tun.coast_sec,
+                             with_reid=tun.with_reid, fixed_camera=tun.fixed_camera,
+                             detect_fps=tun.detect_fps,
+                             tracker_overrides={"new_track_thresh": tun.new_track_thresh})
+
+
 @dataclass
 class YoloPersonTracker:
     fps: float

@@ -2,6 +2,7 @@
 // and tracking, and try a prompt on one worker image before saving.
 
 import { api, apiKey } from "../api.js";
+import { f, TRACKING_GROUPS } from "../peopleFields.js";
 import { fmt, h } from "../ui.js";
 
 const ITEM_LABELS = { helmet: "Helmet", vest: "Vest", gloves: "Gloves", boots: "Boots", goggles: "Goggles" };
@@ -15,8 +16,6 @@ const usesDetect = (d) => (d.confirm_no_with_detect || d.confirm_yes_on_overlap 
   : `Not used while “${NO_CHECK}” and “${YES_CHECK}” are both off.`);
 const usesBodyPart = (d) => (d.check_body_part ? null : "Not used while “Unverified when the body part can't be seen” is off.");
 const usesVerify = (d) => usesDetect(d) ?? (d.verify_detected_box ? null : "Not used while “Re-ask about the detected box” is off.");
-
-const f = (key, type, label, hint, extra = {}) => ({ key, type, label, hint, ...extra });
 
 // Each card has groups of rows; `child` rows are indented under the setting they depend on.
 const CARDS = [
@@ -105,37 +104,7 @@ const CARDS = [
   {
     id: "tracking", nav: "Tracking", title: "Person tracking",
     intro: "YOLO finds people on every frame; BoT-SORT keeps their IDs.",
-    groups: [
-      { title: "Finding people", fields: [
-        f("person_model", "model", "Detection model", "Bigger models find more partly hidden workers but are slower. Put .pt, .engine (TensorRT) or .onnx files in models/."),
-        f("detect_fps", "number", "Detect people",
-          "How often the person detector runs; in between, boxes move on at their last speed. The detector is the slowest part of a run: 10 a second is about 3× faster than every frame of a 30 fps video. 0 = every frame.",
-          { min: 0, max: 60, step: 1, unit: "times a second" }),
-        f("detector_imgsz", "select", "Detector input size", "Frames are scaled to this. Larger finds smaller people but is slower.",
-          { numeric: true, options: [320, 480, 640, 800, 960, 1280, 1600, 1920].map((v) => [v, `${v} px`]) }),
-        f("detector_conf", "number", "Detection confidence", "Weakest detection the tracker considers. Low values help keep partly hidden workers.",
-          { min: 0.01, max: 0.9, step: 0.01 }),
-      ] },
-      { title: "Keeping IDs", fields: [
-        f("new_track_thresh", "number", "Alpha",
-          "Confidence a detection needs to start a new person. Lower tracks more hard-to-see workers but creates more short, spurious IDs. Also set on the New inspection page.",
-          { min: 0.05, max: 0.95, step: 0.05 }),
-        f("min_track_age_sec", "number", "Ignore tracks younger than",
-          "Filters flicker: a track must last this long before its box is drawn. Checks wait longer (see “Check a new person after”).",
-          { min: 0, max: 3, step: 0.1, unit: "s" }),
-        f("hidden_sec", "number", "Keep a hidden worker's ID for",
-          "Someone out of view for less than this keeps their ID when they reappear near where they were lost.",
-          { min: 0, max: 60, step: 1, unit: "s" }),
-        f("coast_sec", "number", "Keep drawing a missed box for",
-          "When the detector misses someone for a few frames, their last box stays on screen instead of blinking off. Not checked meanwhile.",
-          { min: 0, max: 3, step: 0.1, unit: "s" }),
-      ] },
-      { title: "Camera and appearance", fields: [
-        f("fixed_camera", "toggle", "Fixed camera", "Skips camera-motion compensation: faster, and steadier boxes when the camera doesn't move."),
-        f("with_reid", "toggle", "Compare appearance (ReID)",
-          "Also matches people by appearance (models/yolo11n-cls.pt, downloaded on first use). About 40% slower per frame; in our tests it didn't prevent ID swaps when workers cross."),
-      ] },
-    ],
+    groups: TRACKING_GROUPS,
   },
 ];
 
@@ -405,6 +374,8 @@ export async function renderDev(root) {
       "Endpoint: ", h("code", {}, state.moondream_endpoint),
       h("span", { class: "hint" }, " · set MOONDREAM_ENDPOINT in the server's .env to use another provider or a self-hosted server."
         + " A key entered in a form always uses Moondream Cloud.")) : null,
+    c.id === "tracking" ? h("p", { class: "endpoint-note" }, "Not sure which settings are best? Try them on a video in the ",
+      h("a", { href: "#dev/people" }, "person detection playground"), ". Changes there are never saved.") : null,
     c.endpointNote ? h("datalist", { id: "md-models" },
       ["moondream3.1-9B-A2B", "moondream3-preview"].map((m) => h("option", { value: m }))) : null,
     ...c.groups.map((g) => group(g, (s) => setting(s)))));
@@ -487,7 +458,7 @@ export async function renderDev(root) {
         h("span", { class: "eyebrow" }, "Developer options"),
         h("h1", {}, "Tune detection"),
         changesNote),
-      h("div", { class: "actions" }, viewSwitch, resetBtn)),
+      h("div", { class: "actions" }, h("a", { class: "btn", href: "#dev/people" }, "Person detection playground"), viewSwitch, resetBtn)),
     h("div", { class: "dev-bar" }, nav, h("div", { class: "actions" }, dirtyPill, discardBtn, saveBtn)),
     errorBox,
     accessCard,

@@ -228,6 +228,26 @@ class Tuning(BaseModel):
         return _diff(self.model_dump(), Tuning().model_dump())
 
 
+# The settings that decide who is found, tracked and then checked for PPE: what the person
+# detection playground lets you try without touching the saved settings.
+PERSON_FIELDS = (
+    "person_model", "detector_imgsz", "detect_fps", "detector_conf", "new_track_thresh",
+    "min_track_age_sec", "hidden_sec", "coast_sec", "with_reid", "fixed_camera",
+    "min_check_height_frac", "min_check_height_px", "min_check_age_sec",
+)
+
+
+def with_person_settings(overrides: dict, base: "Tuning | None" = None) -> "Tuning":
+    """`base` (default: the defaults) with the person-detection settings in `overrides` applied.
+
+    Validated like any other settings, so ranges are enforced; unknown names are an error.
+    """
+    unknown = set(overrides) - set(PERSON_FIELDS)
+    if unknown:
+        raise ValueError(f"not person detection settings: {', '.join(sorted(unknown))}")
+    return Tuning.model_validate({**(base or Tuning()).model_dump(), **overrides})
+
+
 def _diff(a: dict, b: dict, prefix: str = "") -> list[str]:
     out = []
     for k, v in a.items():

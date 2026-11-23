@@ -14,11 +14,13 @@ from fastapi.staticfiles import StaticFiles
 
 from .api.routes import config as config_routes
 from .api.routes import dev as dev_routes
+from .api.routes import people_lab as people_lab_routes
 from .api.routes import runs as runs_routes
 from .core.settings import Settings
 from .services.dev_settings import DevSettingsStore
 from .services.keys import KeyVerifier, verify_key
 from .services.media import VideoConverter
+from .services.people_lab import PeoplePlayground
 from .services.run_store import RunStore
 from .services.runner import AnalyzerFactory, PeopleFactory, RunRunner, default_analyzer_factory
 
@@ -51,6 +53,7 @@ def create_app(settings: Settings | None = None,
             threading.Thread(target=warm_up, args=(settings.person_model,), daemon=True).start()
         yield
         app.state.runner.shutdown()
+        app.state.people_lab.shutdown()
 
     app = FastAPI(title="PPE Inspector", version="0.1.0", lifespan=lifespan)
     store = RunStore(settings.data_dir)
@@ -65,9 +68,13 @@ def create_app(settings: Settings | None = None,
                                  person_model=settings.person_model,
                                  moondream_endpoint=settings.moondream_endpoint)
 
+    app.state.people_lab = PeoplePlayground(settings.data_dir, people_factory=people_factory,
+                                            default_model=settings.person_model)
+
     app.include_router(config_routes.router)
     app.include_router(runs_routes.router)
     app.include_router(dev_routes.router)
+    app.include_router(people_lab_routes.router)
     # Registered last so /api routes take precedence.
     app.mount("/", RevalidatedStaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

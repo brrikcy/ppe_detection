@@ -102,8 +102,9 @@ class ViolationEvent(BaseModel):
     frame_image: str | None = None  # whole annotated frame, file name under /frames/
     clean_image: str | None = None  # the same frame without boxes, under /frames/ (None: older runs)
     detected_at: datetime | None = None  # wall-clock time of the incident's first check (None: older runs)
-    # True: a later check of the person had the items (PPE put back on). False: still missing at
-    # their last check. None: runs made before tracking.
+    # True: a later check of the person had the items (PPE put back on). False: not resolved: still
+    # missing at their last check, or not seen since (checks where the item couldn't be seen don't
+    # resolve it). None: runs made before tracking.
     resolved: bool | None = None
 
 

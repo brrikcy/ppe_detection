@@ -117,3 +117,25 @@ def test_violation_links_the_frame_without_boxes():
     assert (e.frame_image, e.clean_image) == ("000010.jpg", "000010_clean.jpg")
     [no_frame] = build_summary(timeline, available_frames=set()).events
     assert no_frame.clean_image is None
+
+
+# ---- checks where the item couldn't be seen don't resolve an incident ---------------------------------
+def test_unseen_checks_do_not_resolve_an_incident():
+    # Missing, then the helmet is out of sight for the rest of the video: nobody saw it put back on.
+    [inc] = build_summary(run("MMMUUU")).events
+    assert inc.resolved is False and (inc.time_sec, inc.end_sec) == (1.0, 3.0)
+
+
+def test_an_incident_is_resolved_by_a_check_that_sees_the_item():
+    [inc] = build_summary(run("MMMUUOOO")).events
+    assert inc.resolved is True
+
+
+def test_a_violation_after_an_unseen_gap_is_the_same_incident():
+    events = build_summary(run("MMMUUMMM")).events
+    assert len(events) == 1 and events[0].resolved is False and events[0].end_sec == 7.0
+
+
+def test_an_unseen_item_before_any_violation_changes_nothing():
+    s = build_summary(run("UUUMMM"))
+    assert len(s.events) == 1 and s.events[0].resolved is False

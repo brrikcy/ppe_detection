@@ -608,7 +608,9 @@ async function buildPlayground(getDraft) {
     for (const s of r.steps) {
       if (s.step === "query") {
         if (s.question) steps.push(h("li", {}, h("b", {}, "Asked: "), h("q", {}, s.question)));
-        steps.push(h("li", {}, h("b", {}, "Moondream answered: "), h("code", {}, JSON.stringify(s.answer)), ` → read as ${s.read_as}`));
+        steps.push(h("li", {}, h("b", {}, "Moondream answered: "), h("code", {}, JSON.stringify(s.answer)), ` → read as ${s.read_as}`,
+          s.visible === "no" ? " (not visible, so “wearing” is ignored)"
+            : s.visible === "yes" ? ` (visible, so “wearing: ${s.wearing ?? "missing"}” counts)` : ""));
       } else if (s.step === "overlap") {
         steps.push(h("li", {}, h("b", {}, "Overlap: "),
           `${Math.round(s.share * 100)}% of this worker is covered by others, so the “yes” must be confirmed`));

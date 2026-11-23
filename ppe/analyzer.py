@@ -127,8 +127,36 @@ _NOT_VISIBLE = re.compile(
     r"out\s+of\s+(view|frame|sight)|cut\s+off)\b", re.I)
 
 
+# A two-step reply: "visible: no; wearing: no". Visibility comes first: wearing counts only when
+# the part is visible.
+_VISIBLE_KEY = re.compile(r"\bvisible\s*[:=\-]\s*(yes|no|true|false)\b", re.I)
+_WEARING_KEY = re.compile(r"\bwearing\s*[:=\-]\s*(\w+(?:/\w+)?)", re.I)
+
+
+def _split_answer(answer: str) -> tuple[bool | None, str | None]:
+    """(visible, wearing) from a "visible: yes; wearing: no" reply; (None, None) for any other reply.
+
+    `wearing` is the word after "wearing:" (None if missing); it is only meaningful when visible.
+    """
+    m = _VISIBLE_KEY.search(answer)
+    if not m:
+        return None, None
+    w = _WEARING_KEY.search(answer)
+    return m.group(1).lower() in ("yes", "true"), w.group(1).lower() if w else None
+
+
 def _read_answer(answer: str) -> str:
-    """"yes", "no", "not visible" or "unclear" (anything else, e.g. "Not sure")."""
+    """"yes", "no", "not visible" or "unclear" (anything else, e.g. "Not sure").
+
+    For a two-step reply ("visible: no; wearing: no") the visibility decides: "no" is "not visible"
+    whatever wearing says; only when it is "yes" is wearing read, as yes or no (n/a, a missing
+    wearing or anything else is unclear).
+    """
+    visible, wearing = _split_answer(answer)
+    if visible is False:
+        return "not visible"
+    if visible is True:
+        return {"yes": "yes", "no": "no"}.get(wearing, "unclear")
     verdict = _is_yes(answer)
     if verdict is not None:
         return "yes" if verdict else "no"
@@ -136,12 +164,23 @@ def _read_answer(answer: str) -> str:
 
 
 def _parse_multi(answer: str, items: list[str]) -> dict[str, str]:
-    """Reads "helmet: yes\\nvest: no" style replies; items it can't find are left out."""
+    """Reads "helmet: yes\\nvest: no" style replies; items it can't find are left out.
+
+    An item's reply is its first word ("not visible" counts as one), or, for two-step replies like
+    "helmet: visible: yes; wearing: no", the rest of its line, which _read_answer then reads.
+    """
     out = {}
     for item in items:
-        m = re.search(rf"\b{re.escape(item)}s?\b\W*[:\-=]?\s*(not\s+visible|\w+)", answer, re.I)
-        if m:
-            out[item] = m.group(1)
+        m = re.search(rf"\b{re.escape(item)}s?\b\W*[:\-=]?\s*([^\n]*)", answer, re.I)
+        if not m:
+            continue
+        rest = m.group(1)
+        if _VISIBLE_KEY.search(rest):
+            out[item] = rest.strip()
+            continue
+        first = re.match(r"(not\s+visible|\w+)", rest, re.I)
+        if first:
+            out[item] = first.group(1)
     return out
 
 
@@ -258,7 +297,11 @@ class PPEAnalyzer:
             question = None  # asked together with the other items
         read = _read_answer(answer)
         if trace is not None:
-            trace.append({"step": "query", "question": question, "answer": answer, "read_as": read})
+            step = {"step": "query", "question": question, "answer": answer, "read_as": read}
+            visible, wearing = _split_answer(answer)
+            if visible is not None:  # a two-step reply: show how it was split
+                step.update(visible="yes" if visible else "no", wearing=wearing)
+            trace.append(step)
         if read == "not visible":
             # Moondream says the body part can't be seen: no need to look for the item or the part.
             return t.not_visible_answer

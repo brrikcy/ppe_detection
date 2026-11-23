@@ -136,6 +136,11 @@ def _incidents(timeline: list[dict], available_snapshots, available_frames) -> l
                 continue
             if state not in VERDICTS:
                 continue  # too far, failed or not checked: says nothing either way
+            if state == "unverified":
+                # The item couldn't be seen (e.g. "not visible"), so nobody saw the PPE put back on:
+                # an open incident stays open, and is marked resolved only by a check that sees the
+                # items. If the violation shows again afterwards it is the same incident.
+                continue
             if state != "violation":
                 close(tid, resolved=True)  # a verdict without the item missing: PPE back on
                 continue

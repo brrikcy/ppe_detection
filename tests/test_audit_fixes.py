@@ -332,3 +332,84 @@ def test_the_question_sent_to_moondream_names_the_part():
     m = Scripted(answer="yes")
     status(m, "helmet")
     assert "Answer not visible if the head can't be seen" in m.questions[0]
+
+
+# ---- two-step replies: "visible: yes or no; wearing: yes, no or n/a" -------------------------------
+@pytest.mark.parametrize("answer,expected", [
+    # Not visible: wearing is not considered, whatever it says.
+    ("visible: no; wearing: no", "not visible"), ("visible: no; wearing: yes", "not visible"),
+    ("visible: no; wearing: n/a", "not visible"), ("Visible: No.", "not visible"), ("visible=no", "not visible"),
+    ("wearing: yes; visible: no", "not visible"),
+    # Visible: only now wearing counts.
+    ("visible: yes; wearing: yes", "yes"), ("Visible: Yes. Wearing: No.", "no"),
+    ("visible: yes\nwearing: no", "no"), ("visible - yes, wearing - yes", "yes"),
+    ("visible: yes; wearing: n/a", "unclear"), ("visible: yes; wearing: maybe", "unclear"),
+    ("visible: yes", "unclear"),  # no wearing given
+    # Other replies are read as before.
+    ("yes", "yes"), ("No", "no"), ("Not visible", "not visible"), ("Not sure", "unclear"),
+])
+def test_two_step_reply_is_read_visibility_first(answer, expected):
+    from ppe.analyzer import _read_answer
+
+    assert _read_answer(answer) == expected
+
+
+def test_two_step_reply_in_a_combined_answer():
+    reply = "helmet: visible: yes; wearing: no\nvest: visible: no; wearing: n/a\ngloves: yes\nboots: not visible"
+    got = _parse_multi(reply, ["helmet", "vest", "gloves", "boots"])
+    from ppe.analyzer import _read_answer
+
+    assert {k: _read_answer(v) for k, v in got.items()} == \
+        {"helmet": "no", "vest": "not visible", "gloves": "yes", "boots": "not visible"}
+    # Several items on one line.
+    one = _parse_multi("helmet: visible: yes; wearing: yes; vest: visible: no; wearing: no", ["helmet", "vest"])
+    assert {k: _read_answer(v) for k, v in one.items()} == {"helmet": "yes", "vest": "not visible"}
+
+
+def test_visible_no_is_not_visible_whatever_wearing_says():
+    for wearing in ("no", "yes", "n/a"):
+        m = Scripted(answer=f"visible: no; wearing: {wearing}")
+        out = status(m, "helmet")
+        assert out["status"] == "unverified", wearing
+        assert [s["step"] for s in out["steps"]] == ["query"] and len(m.questions) == 1  # no extra calls
+        step = out["steps"][0]
+        assert step["read_as"] == "not visible" and step["visible"] == "no" and step["wearing"] == wearing
+    # The "not visible" rule applies, as for a plain "not visible".
+    assert status(Scripted(answer="visible: no; wearing: no"), "helmet", not_visible_answer="missing")["status"] == "missing"
+    assert status(Scripted(answer="visible: no; wearing: yes"), "helmet", not_visible_answer="present")["status"] == "present"
+
+
+def test_wearing_counts_only_when_visible():
+    assert status(Scripted(answer="visible: yes; wearing: yes"), "vest")["status"] == "present"
+    assert status(Scripted(answer="visible: yes; wearing: no"), "vest")["status"] == "missing"
+    out = status(Scripted(answer="visible: yes; wearing: n/a"), "vest", unclear_answer="unverified")
+    assert out["status"] == "unverified" and out["steps"][0]["read_as"] == "unclear"
+    assert status(Scripted(answer="visible: yes; wearing: n/a"), "vest", unclear_answer="missing")["status"] == "missing"
+
+
+def test_two_step_replies_in_one_question_per_worker():
+    class Combined(Scripted):
+        def query(self, image, question):
+            self.questions.append(question)
+            return {"answer": "helmet: visible: no; wearing: no\nvest: visible: yes; wearing: no"}
+    m = Combined()
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0, one_query_per_worker=True), model=m)
+    [r] = a.check_workers(IMG, [BOX])
+    a.close()
+    assert r.unverified == ["helmet"] and r.violations == ["No Vest"] and len(m.questions) == 1
+
+
+def test_not_visible_flows_through_voting_like_any_unverified_item():
+    class Two(Scripted):
+        def query(self, image, question):
+            self.questions.append(question)
+            return {"answer": "visible: no; wearing: no"}
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0, required_ppe=["helmet"]), model=Two())
+    s = PersonStatus(window=3, confirm=2)
+    for frame in range(3):
+        [r] = a.check_workers(IMG, [BOX])
+        s.add(r, frame)
+    a.close()
+    shown = s.display(1, BOX, too_small=False)
+    # Never a violation, however many "wearing: no" the replies hold: the helmet is unseen.
+    assert shown.violations == [] and shown.unverified == ["helmet"]

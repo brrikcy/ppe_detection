@@ -1,7 +1,7 @@
 """PPE checks on tracked workers using Moondream.
 
 Workers are found and tracked locally (ppe.people). For each worker due a check:
-  1. The worker is cropped and asked one yes/no question per required PPE item
+  1. The worker is cropped and asked one yes/no/not-visible question per required PPE item
      (or one question for all items; prompts and the rules below are tunable, see ppe.tuning).
   2. A "no" answer is confirmed with `detect` on the crop. A detected box overrules
      the "no" only if it is on this worker (mostly inside the item's region of their
@@ -120,11 +120,26 @@ def _is_yes(answer: str) -> bool | None:
     return None
 
 
+# "Not visible": the body part where the item would be worn can't be seen. Checked after yes and
+# no, so "No, not visible" is still a no.
+_NOT_VISIBLE = re.compile(
+    r"^\W*(i\s+)?(not\s+(visible|shown|in\s+view)|(can'?t|cannot|can\s+not|unable\s+to)\s+see|hidden|obscured|"
+    r"out\s+of\s+(view|frame|sight)|cut\s+off)\b", re.I)
+
+
+def _read_answer(answer: str) -> str:
+    """"yes", "no", "not visible" or "unclear" (anything else, e.g. "Not sure")."""
+    verdict = _is_yes(answer)
+    if verdict is not None:
+        return "yes" if verdict else "no"
+    return "not visible" if _NOT_VISIBLE.match(answer) else "unclear"
+
+
 def _parse_multi(answer: str, items: list[str]) -> dict[str, str]:
     """Reads "helmet: yes\\nvest: no" style replies; items it can't find are left out."""
     out = {}
     for item in items:
-        m = re.search(rf"\b{re.escape(item)}s?\b\W*[:\-=]?\s*(\w+)", answer, re.I)
+        m = re.search(rf"\b{re.escape(item)}s?\b\W*[:\-=]?\s*(not\s+visible|\w+)", answer, re.I)
         if m:
             out[item] = m.group(1)
     return out
@@ -241,14 +256,16 @@ class PPEAnalyzer:
             answer = self._call(self.model.query, crop, question).get("answer", "")
         else:
             question = None  # asked together with the other items
-        verdict = _is_yes(answer)
+        read = _read_answer(answer)
         if trace is not None:
-            trace.append({"step": "query", "question": question, "answer": answer,
-                          "read_as": {True: "yes", False: "no", None: "unclear"}[verdict]})
-        if verdict is None:
+            trace.append({"step": "query", "question": question, "answer": answer, "read_as": read})
+        if read == "not visible":
+            # Moondream says the body part can't be seen: no need to look for the item or the part.
+            return t.not_visible_answer
+        if read == "unclear":
             log.debug("Unclear answer for %s: %r - treating as %s", item, answer, t.unclear_answer)
             return t.unclear_answer
-        if verdict:
+        if read == "yes":
             share = overlap_share(box, others)
             if not t.confirm_yes_on_overlap or share < t.overlap_threshold:
                 return "present"

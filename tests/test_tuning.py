@@ -127,7 +127,9 @@ class FeetAnswer(Recording):
 
     def query(self, image, question):
         self.questions.append(question)
-        return {"answer": self.feet if "feet" in question else "No."}
+        # The body-part question ("Are this person's feet visible?"), not the boots question, which
+        # also names the feet ("Answer not visible if the feet can't be seen").
+        return {"answer": self.feet if "feet visible" in question else "No."}
 
     def detect(self, image, obj):
         return {"objects": [{"x_min": 0.4, "y_min": 0.8, "x_max": 0.5, "y_max": 0.9}]}

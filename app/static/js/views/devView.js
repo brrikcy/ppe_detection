@@ -24,8 +24,11 @@ const CARDS = [
     intro: "How Moondream's answers become PPE OK, a violation, or unverified.",
     groups: [
       { title: "Unclear answers", fields: [
+        f("not_visible_answer", "select", "A “not visible” answer counts as",
+          "When Moondream says the part of the body where the item would be worn is hidden, cut off or out of view. Unverified: the item is neither OK nor a violation. No detect or body-part calls are made for it, so it also saves calls.",
+          { options: [["unverified", "Unverified"], ["present", "Present (no violation)"], ["missing", "Missing (violation)"]] }),
         f("unclear_answer", "select", "An unclear answer counts as",
-          "When the reply is neither yes nor no (for example “Not sure”). Present avoids false alarms; missing avoids misses.",
+          "When the reply is none of yes, no or not visible (for example “Not sure”). Present avoids false alarms; missing avoids misses.",
           { options: [["present", "Present (no violation)"], ["unverified", "Unverified"], ["missing", "Missing (violation)"]] }),
       ] },
       { title: "When Moondream says “no”", fields: [
@@ -113,6 +116,8 @@ const ITEM_ROWS = [
   { key: "question", type: "textarea", label: "Wording", hint: "Replaces {item} in the question template." },
   { key: "detect_term", type: "text", label: "Detect term",
     hint: "What detect looks for to overrule a “no”, or to confirm a “yes” when workers overlap.", dependsOn: usesDetect },
+  { key: "part_name", type: "text", label: "Part named in the prompt",
+    hint: "Replaces {part} in the question template (“Answer not visible if the head can't be seen”) and is shown on this item's line in the combined question. Wording only: it makes no check of its own." },
   { key: "body_part", type: "text", label: "Body part", hint: "If detect can't find it on the worker, the item is unverified. Blank = no check. Not used when there is a body part question.",
     dependsOn: usesBodyPart, blankIsNull: true },
   { key: "body_part_question", type: "textarea", label: "Body part question",
@@ -312,7 +317,7 @@ export async function renderDev(root) {
   function refreshPreview() {
     const it = draft.items[previewItem.value];
     preview.textContent = draft.question_template.includes("{item}")
-      ? draft.question_template.replaceAll("{item}", it.question)
+      ? draft.question_template.replaceAll("{item}", it.question).replaceAll("{part}", it.part_name)
       : "The template must contain {item}.";
   }
   controls.push({ refresh: refreshPreview });
@@ -320,14 +325,14 @@ export async function renderDev(root) {
   const promptCard = card("prompts", "Moondream prompts", "What Moondream is asked. Unsaved changes are used by the playground above.",
     group({ title: "Question for each item", fields: [
       { key: "question_template", type: "textarea", label: "Question template",
-        hint: "{item} is replaced by the item's wording (see PPE items). Keep “Answer only yes or no”: other replies count as unclear." },
+        hint: "{item} is replaced by the item's wording and {part} by the part of the body it is worn on, e.g. “the head” (both under PPE items). Keep “Answer only yes, no or not visible”: other replies count as unclear. A saved template keeps its old wording when the defaults change: use “Reset” on this row to get the new one." },
     ] }, (s) => setting(s)),
     h("div", { class: "prompt-preview-row" }, h("span", { class: "eyebrow" }, "Sent for"), previewItem, preview),
     group({ title: "One question for all items", fields: [
       { key: "one_query_per_worker", type: "toggle", label: "Ask about all items at once",
         hint: "One request per worker instead of one per item: fewer calls, but answers may be less reliable. Items missing from the reply are asked about on their own." },
       { key: "multi_template", type: "textarea", label: "Question for all items", child: true,
-        hint: "{items} is replaced by one “name: wording” line per item. The reply must name each item followed by yes or no.",
+        hint: "{items} is replaced by one “name: wording” line per item. The reply must name each item followed by yes, no or not visible.",
         dependsOn: offUnless("one_query_per_worker", "Ask about all items at once") },
     ] }, (s) => setting(s)),
     group({ title: "Re-check of a detected box", fields: [

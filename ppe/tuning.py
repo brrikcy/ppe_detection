@@ -16,12 +16,14 @@ MODEL_SUFFIXES = (".pt", ".engine", ".onnx")  # person-detection weights Ultraly
 
 DEFAULT_QUESTION_TEMPLATE = (
     "Focus on the main person in the centre of this image. "
-    "Is this person wearing {item}? Answer only yes or no."
+    "Is this person wearing {item}? Answer only yes, no or not visible. "
+    "Answer not visible if {part} can't be seen (hidden, cut off or out of view)."
 )
 DEFAULT_VERIFY_TEMPLATE = "Is this a {term}? Answer only yes or no."
 DEFAULT_MULTI_TEMPLATE = (
     "Focus on the main person in the centre of this image. "
-    "For each line, answer yes or no:\n{items}\n"
+    "For each line, answer yes, no or not visible "
+    "(not visible: the body part named on that line can't be seen: hidden, cut off or out of view):\n{items}\n"
     "Reply with one line per item, like helmet: yes"
 )
 
@@ -32,6 +34,10 @@ class ItemTuning(BaseModel):
     question: str = Field(min_length=1, max_length=300)  # fills {item} in the question template
     detect_term: str = Field(min_length=1, max_length=80)  # confirms a "no" answer with detect()
     body_part: str | None = Field(None, max_length=80)  # if not found, the item is unverified
+    # Where the item is worn, as named in the prompt: fills {part} in the question template ("Answer
+    # not visible if the head can't be seen") and is shown on each line of the combined question.
+    # Wording only: unlike body_part it makes no check of its own.
+    part_name: str = Field("the part of the body it is worn on", min_length=1, max_length=80)
     # Asked about the crop instead of detecting body_part; anything but "yes" makes the item unverified.
     body_part_question: str | None = Field(None, max_length=300)
     # Where on the worker the item sits, as fractions of the person box height from the top.
@@ -45,7 +51,7 @@ class ItemTuning(BaseModel):
     min_height: float = Field(0.0, ge=0, le=2)
     max_height: float = Field(2.0, ge=0, le=2)
 
-    @field_validator("question", "detect_term")
+    @field_validator("question", "detect_term", "part_name")
     @classmethod
     def _strip(cls, v: str) -> str:
         v = v.strip()
@@ -73,22 +79,23 @@ class ItemTuning(BaseModel):
 
 DEFAULT_ITEMS: dict[str, ItemTuning] = {
     "helmet": ItemTuning(question="a hard hat / safety helmet on their head", detect_term="hard hat",
-                         body_part="head", region_top=-0.1, region_bottom=0.35,
+                         body_part="head", part_name="the head", region_top=-0.1, region_bottom=0.35,
                          min_width=0.03, max_width=0.9, min_height=0.02, max_height=0.3),
     "vest": ItemTuning(question="a high-visibility safety vest or hi-vis jacket",
-                       detect_term="high visibility vest", region_top=0.1, region_bottom=0.8,
+                       detect_term="high visibility vest", part_name="the upper body", region_top=0.1, region_bottom=0.8,
                        min_width=0.2, max_width=1.3, min_height=0.15, max_height=0.7),
     "gloves": ItemTuning(question="protective work gloves on their hands", detect_term="work glove",
-                         body_part="hand", min_width=0.01, max_width=0.5, min_height=0.01, max_height=0.25),
+                         body_part="hand", part_name="the hands", min_width=0.01, max_width=0.5, min_height=0.01, max_height=0.25),
     # Detect finds a "foot" in a dark patch under a chair or behind a wall, so for feet Moondream
     # is asked instead. It answers well about feet but not about faces, so other items keep detect.
     "boots": ItemTuning(question="safety boots / work boots", detect_term="boot", body_part="foot",
+                        part_name="the feet",
                         body_part_question=("Focus on the main person in the centre of this image. "
                                             "Are this person's feet visible? Answer only yes or no."),
                         region_top=0.6, region_bottom=1.1,
                         min_width=0.02, max_width=0.7, min_height=0.01, max_height=0.35),
     "goggles": ItemTuning(question="safety goggles or safety glasses", detect_term="safety goggles",
-                          body_part="face", region_top=-0.05, region_bottom=0.35,
+                          body_part="face", part_name="the face", region_top=-0.05, region_bottom=0.35,
                           min_width=0.02, max_width=0.7, min_height=0.005, max_height=0.15),
 }
 # Items no longer offered. Settings saved before their removal (and the copies kept by old
@@ -109,6 +116,9 @@ class Tuning(BaseModel):
     # --- PPE decision rules ----------------------------------------------------
     # What an answer that is neither yes nor no counts as.
     unclear_answer: Literal["present", "unverified", "missing"] = "present"
+    # What a "not visible" answer counts as. Unverified: the item can't be judged, so it is neither
+    # a violation nor OK. No detect or body-part calls are made for it: the answer already says it.
+    not_visible_answer: Literal["present", "unverified", "missing"] = "unverified"
     confirm_no_with_detect: bool = True  # a "no" only counts if detect() can't find the item either
     min_region_overlap: float = Field(0.6, ge=0, le=1)  # share of a detected box inside the item's region
     verify_detected_box: bool = True  # re-ask Moondream about a detected box before it overrules a "no"
@@ -210,13 +220,14 @@ class Tuning(BaseModel):
         return v
 
     def question_for(self, item: str) -> str:
-        return self.question_template.replace("{item}", self.items[item].question)
+        spec = self.items[item]
+        return self.question_template.replace("{item}", spec.question).replace("{part}", spec.part_name)
 
     def verify_question_for(self, item: str) -> str:
         return self.verify_template.replace("{term}", self.items[item].detect_term)
 
     def multi_question_for(self, items: list[str]) -> str:
-        lines = "\n".join(f"{i}: {self.items[i].question}" for i in items)
+        lines = "\n".join(f"{i}: {self.items[i].question} (body part: {self.items[i].part_name})" for i in items)
         return self.multi_template.replace("{items}", lines)
 
     def min_check_height(self, frame_height: int) -> float:

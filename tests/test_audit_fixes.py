@@ -225,3 +225,110 @@ def test_too_far_shows_last_status():
     far = s.display(4, (0, 0, 1, 1), too_small=True)
     assert far.too_small and far.tag == "#4 Too far (was Missing: Helmet)"
     assert PersonStatus().display(5, (0, 0, 1, 1), too_small=True).tag == "#5 Too far"
+
+
+# ---- "not visible" as an answer ------------------------------------------------------------
+@pytest.mark.parametrize("answer,expected", [
+    ("Not visible", "not visible"), ("not visible.", "not visible"), ("Not visible, the head is cut off", "not visible"),
+    ("I can't see the head", "not visible"), ("Cannot see", "not visible"), ("Hidden", "not visible"),
+    ("Out of view", "not visible"),
+    ("yes", "yes"), ("No", "no"), ("No, not visible", "no"),  # yes/no first
+    ("Not sure", "unclear"), ("", "unclear"), ("None", "unclear"),
+])
+def test_not_visible_is_read(answer, expected):
+    from ppe.analyzer import _read_answer
+
+    assert _read_answer(answer) == expected
+
+
+def test_combined_reply_can_say_not_visible():
+    got = _parse_multi("helmet: not visible\nvest: yes\ngloves - Not visible.", ["helmet", "vest", "gloves"])
+    # The reply is kept as written; the reader that follows ignores case.
+    assert {k: v.lower() for k, v in got.items()} == {"helmet": "not visible", "vest": "yes", "gloves": "not visible"}
+
+
+def test_prompts_offer_not_visible():
+    from ppe.tuning import DEFAULT_MULTI_TEMPLATE, DEFAULT_QUESTION_TEMPLATE
+
+    assert "not visible" in DEFAULT_QUESTION_TEMPLATE and "not visible" in DEFAULT_MULTI_TEMPLATE
+
+
+def test_not_visible_makes_the_item_unverified_with_one_call():
+    m = Scripted(answer="Not visible")
+    out = status(m, "helmet")
+    assert out["status"] == "unverified"
+    assert [s["step"] for s in out["steps"]] == ["query"] and out["steps"][0]["read_as"] == "not visible"
+    assert len(m.questions) == 1  # no detect, verify or body-part calls
+
+
+@pytest.mark.parametrize("rule", ["present", "unverified", "missing"])
+def test_not_visible_rule(rule):
+    assert status(Scripted(answer="not visible"), "vest", not_visible_answer=rule)["status"] == rule
+
+
+def test_not_visible_and_unclear_have_their_own_rules():
+    both = dict(not_visible_answer="missing", unclear_answer="present")
+    assert status(Scripted(answer="not visible"), "vest", **both)["status"] == "missing"
+    assert status(Scripted(answer="maybe"), "vest", **both)["status"] == "present"
+
+
+def test_not_visible_in_a_combined_reply():
+    class Combined(Scripted):
+        def query(self, image, question):
+            self.questions.append(question)
+            return {"answer": "helmet: not visible\nvest: yes"}
+    m = Combined()
+    a = PPEAnalyzer(make_cfg(crop_padding=0.0, one_query_per_worker=True), model=m)
+    [r] = a.check_workers(IMG, [BOX])
+    a.close()
+    assert r.unverified == ["helmet"] and r.violations == [] and len(m.questions) == 1
+
+
+# ---- the part named in the prompt -------------------------------------------------------------
+def test_question_names_the_part_for_each_item():
+    from ppe.tuning import Tuning
+
+    t = Tuning()
+    parts = {"helmet": "the head", "vest": "the upper body", "gloves": "the hands", "boots": "the feet", "goggles": "the face"}
+    for item, part in parts.items():
+        q = t.question_for(item)
+        assert f"Answer not visible if {part} can't be seen" in q, q
+        assert "{part}" not in q and "{item}" not in q
+    assert "wearing a hard hat" in t.question_for("helmet")
+
+
+def test_combined_question_names_each_part():
+    from ppe.tuning import Tuning
+
+    q = Tuning().multi_question_for(["helmet", "boots"])
+    assert "helmet: a hard hat / safety helmet on their head (body part: the head)" in q
+    assert "boots: safety boots / work boots (body part: the feet)" in q
+
+
+def test_part_name_is_editable_and_old_templates_still_work():
+    from ppe.tuning import Tuning
+
+    t = Tuning(question_template="Q {item}? Not visible if {part} is hidden.",
+               items={"helmet": {"question": "a cap", "detect_term": "cap", "part_name": "the scalp"}})
+    assert t.question_for("helmet") == "Q a cap? Not visible if the scalp is hidden."
+    # A template without {part} (saved before it existed) is sent as written.
+    old = Tuning(question_template="Is this person wearing {item}? Answer yes, no, or not visible.")
+    assert old.question_for("vest").endswith("or not visible.") and "upper body" not in old.question_for("vest")
+    # Items saved without part_name get the default for their item.
+    saved = Tuning.model_validate({"items": {"boots": {"question": "boots", "detect_term": "boot"}}})
+    assert saved.items["boots"].part_name == "the feet"
+
+
+def test_part_name_must_not_be_blank():
+    from pydantic import ValidationError
+
+    from ppe.tuning import Tuning
+
+    with pytest.raises(ValidationError):
+        Tuning(items={"helmet": {"question": "a cap", "detect_term": "cap", "part_name": "  "}})
+
+
+def test_the_question_sent_to_moondream_names_the_part():
+    m = Scripted(answer="yes")
+    status(m, "helmet")
+    assert "Answer not visible if the head can't be seen" in m.questions[0]

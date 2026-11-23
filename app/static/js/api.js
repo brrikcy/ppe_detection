@@ -93,6 +93,14 @@ export const api = {
     }),
     reset: () => request("/api/dev/tuning", { method: "DELETE" }),
     tryPrompt: (form) => request("/api/dev/try", { method: "POST", body: form }),
+    // Person detection playground: tests of person-detection settings on a video.
+    people: {
+      list: () => request("/api/dev/people"),
+      get: (id) => request(`/api/dev/people/${encodeURIComponent(id)}`),
+      start: (form) => request("/api/dev/people", { method: "POST", body: form }),
+      remove: (id) => request(`/api/dev/people/${encodeURIComponent(id)}`, { method: "DELETE" }),
+      video: (id) => `/api/dev/people/${encodeURIComponent(id)}/video`,
+    },
   },
 
   urls: {

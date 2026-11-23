@@ -10,6 +10,7 @@ from ..core.settings import Settings
 from ..services.dev_settings import DevSettingsStore
 from ..services.keys import KeyVerifier
 from ..services.media import VideoConverter
+from ..services.people_lab import PeoplePlayground
 from ..services.run_store import RunStore
 from ..services.runner import RunRunner
 
@@ -36,3 +37,7 @@ def get_video_converter(request: HTTPConnection) -> VideoConverter:
 
 def get_dev_settings(request: HTTPConnection) -> DevSettingsStore:
     return request.app.state.dev_settings
+
+
+def get_people_lab(request: HTTPConnection) -> PeoplePlayground:
+    return request.app.state.people_lab

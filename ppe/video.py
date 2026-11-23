@@ -227,15 +227,9 @@ def process_video(
              input_path.name, width, height, fps, total, step, reader.decoder, ", live" if live else "")
 
     if people_factory is None:
-        from .people import DEFAULT_MODEL, MODELS_DIR, YoloPersonTracker
+        from .people import tracker_from_tuning
 
-        model = MODELS_DIR / tun.person_model if tun.person_model else Path(cfg.person_model or DEFAULT_MODEL)
-        people = YoloPersonTracker(fps=fps, model_path=model, imgsz=tun.detector_imgsz,
-                                   conf=tun.detector_conf, hidden_sec=tun.hidden_sec,
-                                   min_age_sec=tun.min_track_age_sec, coast_sec=tun.coast_sec,
-                                   with_reid=tun.with_reid, fixed_camera=tun.fixed_camera,
-                                   detect_fps=tun.detect_fps,
-                                   tracker_overrides={"new_track_thresh": tun.new_track_thresh})
+        people = tracker_from_tuning(tun, fps, cfg.person_model)
     else:
         people = people_factory(fps)
     writer = FrameWriter(output_path, width, height, fps, audio_source=input_path, max_seconds=max_seconds)

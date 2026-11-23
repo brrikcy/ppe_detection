@@ -80,25 +80,27 @@ def test_check_workers():
     assert [r.label for r in results] == ["PPE OK", "PPE Violation (2) - No Helmet, No Vest"]
 
 
-class OccludedModel:
-    """Query says "no" for everything, but detect finds a vest and no head."""
+class DetectFindsEverything:
+    """Query says "no" for everything; detect would find every item, but must not be asked."""
+
+    def __init__(self):
+        self.detect_calls = []
 
     def detect(self, image, obj):
-        box = {"x_min": 0.1, "y_min": 0.3, "x_max": 0.9, "y_max": 0.6}
-        return {"objects": [box] if obj == "high visibility vest" else []}
+        self.detect_calls.append(obj)
+        return {"objects": [{"x_min": 0.1, "y_min": 0.1, "x_max": 0.9, "y_max": 0.9}]}
 
     def query(self, image, question):
-        # "no" to the PPE questions; "yes" when asked whether the detected vest really is one.
-        return {"answer": "yes" if question.startswith("Is this a") else "no"}
+        return {"answer": "no"}
 
 
-def test_no_answer_is_confirmed_with_detect():
-    a = PPEAnalyzer(make_cfg(), model=OccludedModel())
+def test_no_answer_is_a_violation_as_it_stands():
+    m = DetectFindsEverything()
+    a = PPEAnalyzer(make_cfg(), model=m)
     [r] = a.check_workers(Image.fromarray(np.zeros((200, 400, 3), np.uint8)), [(40, 0, 200, 180)])
     a.close()
-    # Vest found by detect -> present; head not visible -> helmet unverified.
-    assert r.label == "PPE OK"
-    assert r.unverified == ["helmet"]
+    assert r.violations == ["No Helmet", "No Vest"] and r.unverified == []
+    assert m.detect_calls == []  # a "no" is not double-checked with detect
 
 
 class NeighbourVestModel:

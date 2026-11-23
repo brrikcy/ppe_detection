@@ -59,35 +59,34 @@ def test_combined_answer_is_parsed():
         {"helmet": "yes", "vest": "no", "gloves": "not"}
 
 
-# ---- [D1] the detect double-check ------------------------------------------------------
-def test_helmet_detected_as_vest_does_not_overrule_no():
+# ---- a "no" counts as it is; detect only confirms a "yes" for overlapping workers --------------------
+NEIGHBOUR = (240, 100, 440, 500)  # covers 30% of the worker (BOX), so every "yes" is confirmed with detect
+
+
+def test_a_no_is_a_violation_as_it_stands():
+    cap = (170, 95, 230, 140)  # detect would find a hard hat, but is not asked
+    m = Scripted({"hard hat": [cap]})
+    out = status(m, "helmet")
+    assert out["status"] == "missing" and [s["step"] for s in out["steps"]] == ["query"] and len(m.questions) == 1
+
+
+def test_helmet_detected_as_vest_does_not_confirm_a_yes():
     # A head-sized box at the top of the worker: inside the vest band by its centre, but the
     # wrong size and mostly above the vest region.
     helmet = (170, 95, 230, 150)
-    out = status(Scripted({"high visibility vest": [helmet]}), "vest")
-    assert out["status"] == "missing"
+    out = status(Scripted({"high visibility vest": [helmet]}, answer="yes"), "vest", others=[NEIGHBOUR])
+    assert out["status"] == "unverified"
     [obj] = [s for s in out["steps"] if s["step"] == "detect_object"]
     assert obj["reason"] in ("wrong size", "outside region")
-
-
-def test_cap_detected_as_hard_hat_is_rechecked():
-    cap = (170, 95, 230, 140)  # right place and size for a helmet
-    out = status(Scripted({"hard hat": [cap], "head": [cap]}, verify="No, it's a baseball cap."), "helmet")
-    assert out["status"] == "missing"
-    assert [s["reason"] for s in out["steps"] if s["step"] == "detect_object"][0] == "re-check said no"
-    assert any(s["step"] == "verify" and not s["confirmed"] for s in out["steps"])
-    # A real hard hat that Moondream confirms still overrules the "no".
-    assert status(Scripted({"hard hat": [cap]}, verify="Yes"), "helmet")["status"] == "present"
-    # Re-check switched off: detect alone decides, as before.
-    assert status(Scripted({"hard hat": [cap]}, verify="No"), "helmet", verify_detected_box=False)["status"] == "present"
 
 
 def test_detected_box_must_be_mostly_inside_the_region():
     # A tall "vest" box centred on the torso but reaching far above and below the vest band.
     tall = (130, 0, 270, 600)
-    assert status(Scripted({"high visibility vest": [tall]}), "vest")["status"] == "missing"
+    out = status(Scripted({"high visibility vest": [tall]}, answer="yes"), "vest", others=[NEIGHBOUR])
+    assert out["status"] == "unverified"
     vest = (120, 180, 280, 380)
-    assert status(Scripted({"high visibility vest": [vest]}), "vest")["status"] == "present"
+    assert status(Scripted({"high visibility vest": [vest]}, answer="yes"), "vest", others=[NEIGHBOUR])["status"] == "present"
 
 
 # ---- [D2] guarding a "yes" ------------------------------------------------------------------
@@ -247,10 +246,13 @@ def test_combined_reply_can_say_not_visible():
     assert {k: v.lower() for k, v in got.items()} == {"helmet": "not visible", "vest": "yes", "gloves": "not visible"}
 
 
-def test_prompts_offer_not_visible():
+def test_prompts_ask_about_visibility_first():
     from ppe.tuning import DEFAULT_MULTI_TEMPLATE, DEFAULT_QUESTION_TEMPLATE
 
-    assert "not visible" in DEFAULT_QUESTION_TEMPLATE and "not visible" in DEFAULT_MULTI_TEMPLATE
+    q = DEFAULT_QUESTION_TEMPLATE
+    assert q.index("can you clearly see {part}") < q.index("wearing {item}")
+    assert "visible: yes or no; wearing: yes, no or n/a" in q
+    assert "visible: yes; wearing: no" in DEFAULT_MULTI_TEMPLATE
 
 
 def test_not_visible_makes_the_item_unverified_with_one_call():
@@ -292,7 +294,7 @@ def test_question_names_the_part_for_each_item():
     parts = {"helmet": "the head", "vest": "the upper body", "gloves": "the hands", "boots": "the feet", "goggles": "the face"}
     for item, part in parts.items():
         q = t.question_for(item)
-        assert f"Answer not visible if {part} can't be seen" in q, q
+        assert f"Step 1: can you clearly see {part}?" in q, q
         assert "{part}" not in q and "{item}" not in q
     assert "wearing a hard hat" in t.question_for("helmet")
 
@@ -331,7 +333,7 @@ def test_part_name_must_not_be_blank():
 def test_the_question_sent_to_moondream_names_the_part():
     m = Scripted(answer="yes")
     status(m, "helmet")
-    assert "Answer not visible if the head can't be seen" in m.questions[0]
+    assert "can you clearly see the head?" in m.questions[0]
 
 
 # ---- two-step replies: "visible: yes or no; wearing: yes, no or n/a" -------------------------------

@@ -16,35 +16,31 @@ MODEL_SUFFIXES = (".pt", ".engine", ".onnx")  # person-detection weights Ultraly
 
 DEFAULT_QUESTION_TEMPLATE = (
     "Focus on the main person in the centre of this image. "
-    "Is this person wearing {item}? Answer only yes, no or not visible. "
-    "Answer not visible if {part} can't be seen (hidden, cut off or out of view)."
+    "Step 1: can you clearly see {part}? "
+    "Step 2: only if you can, is this person wearing {item}? "
+    "Reply in exactly this form: visible: yes or no; wearing: yes, no or n/a."
 )
-DEFAULT_VERIFY_TEMPLATE = "Is this a {term}? Answer only yes or no."
 DEFAULT_MULTI_TEMPLATE = (
     "Focus on the main person in the centre of this image. "
-    "For each line, answer yes, no or not visible "
-    "(not visible: the body part named on that line can't be seen: hidden, cut off or out of view):\n{items}\n"
-    "Reply with one line per item, like helmet: yes"
+    "For each line, first say whether the body part named on it can be clearly seen, then, only if it can, "
+    "whether this person is wearing the item:\n{items}\n"
+    "Reply with one line per item in exactly this form, like helmet: visible: yes; wearing: no"
 )
 
 
 class ItemTuning(BaseModel):
-    """How one PPE item is asked about and confirmed."""
+    """How one PPE item is asked about and, for a worker who overlaps a neighbour, confirmed."""
 
     question: str = Field(min_length=1, max_length=300)  # fills {item} in the question template
-    detect_term: str = Field(min_length=1, max_length=80)  # confirms a "no" answer with detect()
-    body_part: str | None = Field(None, max_length=80)  # if not found, the item is unverified
-    # Where the item is worn, as named in the prompt: fills {part} in the question template ("Answer
-    # not visible if the head can't be seen") and is shown on each line of the combined question.
-    # Wording only: unlike body_part it makes no check of its own.
+    detect_term: str = Field(min_length=1, max_length=80)  # confirms a "yes" with detect() when workers overlap
+    # Where the item is worn, as named in the prompt: fills {part} in the question template ("can you
+    # clearly see the head?") and is shown on each line of the combined question. Wording only.
     part_name: str = Field("the part of the body it is worn on", min_length=1, max_length=80)
-    # Asked about the crop instead of detecting body_part; anything but "yes" makes the item unverified.
-    body_part_question: str | None = Field(None, max_length=300)
     # Where on the worker the item sits, as fractions of the person box height from the top.
     region_top: float = Field(0.0, ge=-0.5, le=1.5)
     region_bottom: float = Field(1.0, ge=-0.5, le=1.5)
     # Plausible size of a detected item, as a share of the worker box width / height.
-    # A "vest" box the size of a helmet doesn't overrule a "no". Minimums are loose: a
+    # A "vest" box the size of a helmet doesn't confirm a "yes". Minimums are loose: a
     # bent-over worker has a wide box, and an item at the crop edge is detected cut off.
     min_width: float = Field(0.0, ge=0, le=2)
     max_width: float = Field(2.0, ge=0, le=2)
@@ -58,11 +54,6 @@ class ItemTuning(BaseModel):
         if not v:
             raise ValueError("must not be empty")
         return v
-
-    @field_validator("body_part", "body_part_question")
-    @classmethod
-    def _blank_is_none(cls, v: str | None) -> str | None:
-        return (v or "").strip() or None
 
     @model_validator(mode="after")
     def _region_order(self) -> "ItemTuning":
@@ -79,23 +70,18 @@ class ItemTuning(BaseModel):
 
 DEFAULT_ITEMS: dict[str, ItemTuning] = {
     "helmet": ItemTuning(question="a hard hat / safety helmet on their head", detect_term="hard hat",
-                         body_part="head", part_name="the head", region_top=-0.1, region_bottom=0.35,
+                         part_name="the head", region_top=-0.1, region_bottom=0.35,
                          min_width=0.03, max_width=0.9, min_height=0.02, max_height=0.3),
     "vest": ItemTuning(question="a high-visibility safety vest or hi-vis jacket",
                        detect_term="high visibility vest", part_name="the upper body", region_top=0.1, region_bottom=0.8,
                        min_width=0.2, max_width=1.3, min_height=0.15, max_height=0.7),
     "gloves": ItemTuning(question="protective work gloves on their hands", detect_term="work glove",
-                         body_part="hand", part_name="the hands", min_width=0.01, max_width=0.5, min_height=0.01, max_height=0.25),
-    # Detect finds a "foot" in a dark patch under a chair or behind a wall, so for feet Moondream
-    # is asked instead. It answers well about feet but not about faces, so other items keep detect.
-    "boots": ItemTuning(question="safety boots / work boots", detect_term="boot", body_part="foot",
-                        part_name="the feet",
-                        body_part_question=("Focus on the main person in the centre of this image. "
-                                            "Are this person's feet visible? Answer only yes or no."),
+                         part_name="the hands", min_width=0.01, max_width=0.5, min_height=0.01, max_height=0.25),
+    "boots": ItemTuning(question="safety boots / work boots", detect_term="boot", part_name="the feet",
                         region_top=0.6, region_bottom=1.1,
                         min_width=0.02, max_width=0.7, min_height=0.01, max_height=0.35),
     "goggles": ItemTuning(question="safety goggles or safety glasses", detect_term="safety goggles",
-                          body_part="face", part_name="the face", region_top=-0.05, region_bottom=0.35,
+                          part_name="the face", region_top=-0.05, region_bottom=0.35,
                           min_width=0.02, max_width=0.7, min_height=0.005, max_height=0.15),
 }
 # Items no longer offered. Settings saved before their removal (and the copies kept by old
@@ -106,23 +92,18 @@ RETIRED_ITEMS = ("mask",)
 class Tuning(BaseModel):
     # --- Moondream prompts ---------------------------------------------------
     question_template: str = Field(DEFAULT_QUESTION_TEMPLATE, min_length=1, max_length=1000)
-    # Asked about a detected box before it overrules a "no" ({term} = the item's detect term).
-    verify_template: str = Field(DEFAULT_VERIFY_TEMPLATE, min_length=1, max_length=500)
     # One question for all items of a worker ({items} = one "name: wording" line per item).
     one_query_per_worker: bool = False
     multi_template: str = Field(DEFAULT_MULTI_TEMPLATE, min_length=1, max_length=1500)
     items: dict[str, ItemTuning] = Field(default_factory=lambda: {k: v.model_copy() for k, v in DEFAULT_ITEMS.items()})
 
     # --- PPE decision rules ----------------------------------------------------
-    # What an answer that is neither yes nor no counts as.
+    # What an answer that is none of yes, no or not visible counts as.
     unclear_answer: Literal["present", "unverified", "missing"] = "present"
     # What a "not visible" answer counts as. Unverified: the item can't be judged, so it is neither
-    # a violation nor OK. No detect or body-part calls are made for it: the answer already says it.
+    # a violation nor OK. Nothing else is asked for it: the answer already says it.
     not_visible_answer: Literal["present", "unverified", "missing"] = "unverified"
-    confirm_no_with_detect: bool = True  # a "no" only counts if detect() can't find the item either
     min_region_overlap: float = Field(0.6, ge=0, le=1)  # share of a detected box inside the item's region
-    verify_detected_box: bool = True  # re-ask Moondream about a detected box before it overrules a "no"
-    check_body_part: bool = True  # item unverified (not missing) when its body part can't be seen
     # A "yes" for a worker who overlaps a neighbour may be about the neighbour: confirm it with detect.
     confirm_yes_on_overlap: bool = True
     overlap_threshold: float = Field(0.2, ge=0.01, le=1)  # share of the worker's box covered by others
@@ -160,13 +141,6 @@ class Tuning(BaseModel):
     def _template_has_item(cls, v: str) -> str:
         if "{item}" not in v:
             raise ValueError("must contain {item}, where the item's question goes")
-        return v
-
-    @field_validator("verify_template")
-    @classmethod
-    def _template_has_term(cls, v: str) -> str:
-        if "{term}" not in v:
-            raise ValueError("must contain {term}, where the item's detect term goes")
         return v
 
     @field_validator("multi_template")
@@ -222,9 +196,6 @@ class Tuning(BaseModel):
     def question_for(self, item: str) -> str:
         spec = self.items[item]
         return self.question_template.replace("{item}", spec.question).replace("{part}", spec.part_name)
-
-    def verify_question_for(self, item: str) -> str:
-        return self.verify_template.replace("{term}", self.items[item].detect_term)
 
     def multi_question_for(self, items: list[str]) -> str:
         lines = "\n".join(f"{i}: {self.items[i].question} (body part: {self.items[i].part_name})" for i in items)

@@ -8,14 +8,10 @@ import { fmt, h } from "../ui.js";
 const ITEM_LABELS = { helmet: "Helmet", vest: "Vest", gloves: "Gloves", boots: "Boots", goggles: "Goggles" };
 
 // Settings that only matter when another one is on: return why a field is unused, or null.
-const NO_CHECK = "Double-check “no” answers with detect";
 const YES_CHECK = "Confirm “yes” when workers overlap";
 const offUnless = (key, label) => (d) => (d[key] ? null : `Not used while “${label}” is off.`);
-// Detected boxes are judged by both double-checks.
-const usesDetect = (d) => (d.confirm_no_with_detect || d.confirm_yes_on_overlap ? null
-  : `Not used while “${NO_CHECK}” and “${YES_CHECK}” are both off.`);
-const usesBodyPart = (d) => (d.check_body_part ? null : "Not used while “Unverified when the body part can't be seen” is off.");
-const usesVerify = (d) => usesDetect(d) ?? (d.verify_detected_box ? null : "Not used while “Re-ask about the detected box” is off.");
+// Detected boxes are only used to confirm a “yes” when workers overlap.
+const usesDetect = offUnless("confirm_yes_on_overlap", YES_CHECK);
 
 // Each card has groups of rows; `child` rows are indented under the setting they depend on.
 const CARDS = [
@@ -25,17 +21,11 @@ const CARDS = [
     groups: [
       { title: "Unclear answers", fields: [
         f("not_visible_answer", "select", "A “not visible” answer counts as",
-          "When Moondream says the part of the body where the item would be worn is hidden, cut off or out of view. Unverified: the item is neither OK nor a violation. No detect or body-part calls are made for it, so it also saves calls.",
+          "When Moondream says the part of the body where the item would be worn is hidden, cut off or out of view. Unverified: the item is neither OK nor a violation. Nothing more is asked for it, so it also saves calls.",
           { options: [["unverified", "Unverified"], ["present", "Present (no violation)"], ["missing", "Missing (violation)"]] }),
         f("unclear_answer", "select", "An unclear answer counts as",
           "When the reply is none of yes, no or not visible (for example “Not sure”). Present avoids false alarms; missing avoids misses.",
           { options: [["present", "Present (no violation)"], ["unverified", "Unverified"], ["missing", "Missing (violation)"]] }),
-      ] },
-      { title: "When Moondream says “no”", fields: [
-        f("confirm_no_with_detect", "toggle", NO_CHECK,
-          "A “no” only counts if detect can't find the item on this worker. Off: fewer calls per “no”, and no item found by mistake, but a “no” about a visible worker always counts."),
-        f("check_body_part", "toggle", "Unverified when the body part can't be seen",
-          "If the head (helmet), face (goggles), hands (gloves) or feet (boots) can't be seen on the worker, the item is unverified instead of missing. One call per “no”, with or without the double-check above: detect looks for the body part, or Moondream is asked if the item has a body part question (boots)."),
       ] },
       { title: "When Moondream says “yes”", fields: [
         f("confirm_yes_on_overlap", "toggle", YES_CHECK,
@@ -43,13 +33,10 @@ const CARDS = [
         f("overlap_threshold", "number", "Overlap that needs confirming", "Share of the worker's box covered by other workers.",
           { child: true, min: 0.01, max: 1, step: 0.05, unit: "× box", dependsOn: offUnless("confirm_yes_on_overlap", YES_CHECK) }),
       ] },
-      { title: "Detected boxes", intro: "Used by both double-checks above to decide whether a box detect found counts for this worker.", fields: [
+      { title: "Detected boxes", intro: "Used by the overlap check above to decide whether a box detect found counts for this worker.", fields: [
         f("min_region_overlap", "number", "Inside the item's region",
           "Share of a detected box that must lie in the item's region of the worker (set per item). 0 = only its centre counts.",
           { min: 0, max: 1, step: 0.05, unit: "× box", dependsOn: usesDetect }),
-        f("verify_detected_box", "toggle", "Re-ask about the detected box",
-          "Moondream is asked about the box alone before it counts (a cap is not a hard hat). One more call when it applies.",
-          { dependsOn: usesDetect }),
       ] },
       { title: "Which workers are checked", fields: [
         f("crop_padding", "number", "Crop padding",
@@ -115,14 +102,9 @@ const CARDS = [
 const ITEM_ROWS = [
   { key: "question", type: "textarea", label: "Wording", hint: "Replaces {item} in the question template." },
   { key: "detect_term", type: "text", label: "Detect term",
-    hint: "What detect looks for to overrule a “no”, or to confirm a “yes” when workers overlap.", dependsOn: usesDetect },
+    hint: "What detect looks for to confirm a “yes” when workers overlap.", dependsOn: usesDetect },
   { key: "part_name", type: "text", label: "Part named in the prompt",
-    hint: "Replaces {part} in the question template (“Answer not visible if the head can't be seen”) and is shown on this item's line in the combined question. Wording only: it makes no check of its own." },
-  { key: "body_part", type: "text", label: "Body part", hint: "If detect can't find it on the worker, the item is unverified. Blank = no check. Not used when there is a body part question.",
-    dependsOn: usesBodyPart, blankIsNull: true },
-  { key: "body_part_question", type: "textarea", label: "Body part question",
-    hint: "Asked about the worker instead of detecting the body part: anything but “yes” makes the item unverified. For feet, because detect finds “feet” under chairs and behind walls. Blank = use detect.",
-    dependsOn: usesBodyPart, blankIsNull: true },
+    hint: "Replaces {part} in the question template (“can you clearly see the head?”) and is shown on this item's line in the combined question. Wording only: it makes no check of its own." },
   { pair: true, label: "Region", hint: "Where on the worker the item may be, as a share of the box height from the top (negative = above the box).",
     dependsOn: usesDetect, parts: [["region_top", "top", -0.5, 1.5, 0.05], ["region_bottom", "bottom", -0.5, 1.5, 0.05]] },
   { pair: true, label: "Detected width", hint: "Plausible width of a detected box, as a share of the worker's box width.",
@@ -325,20 +307,15 @@ export async function renderDev(root) {
   const promptCard = card("prompts", "Moondream prompts", "What Moondream is asked. Unsaved changes are used by the playground above.",
     group({ title: "Question for each item", fields: [
       { key: "question_template", type: "textarea", label: "Question template",
-        hint: "{item} is replaced by the item's wording and {part} by the part of the body it is worn on, e.g. “the head” (both under PPE items). Keep “Answer only yes, no or not visible”: other replies count as unclear. A saved template keeps its old wording when the defaults change: use “Reset” on this row to get the new one." },
+        hint: "{item} is replaced by the item's wording and {part} by the part of the body it is worn on, e.g. “the head” (both under PPE items). The default asks for “visible: yes or no; wearing: yes, no or n/a”: visibility is read first, and “wearing” only counts when the part is visible. Other replies count as unclear. A saved template keeps its old wording when the defaults change: use “Reset” on this row to get the new one." },
     ] }, (s) => setting(s)),
     h("div", { class: "prompt-preview-row" }, h("span", { class: "eyebrow" }, "Sent for"), previewItem, preview),
     group({ title: "One question for all items", fields: [
       { key: "one_query_per_worker", type: "toggle", label: "Ask about all items at once",
         hint: "One request per worker instead of one per item: fewer calls, but answers may be less reliable. Items missing from the reply are asked about on their own." },
       { key: "multi_template", type: "textarea", label: "Question for all items", child: true,
-        hint: "{items} is replaced by one “name: wording” line per item. The reply must name each item followed by yes, no or not visible.",
+        hint: "{items} is replaced by one “name: wording” line per item. The reply must name each item followed by its answer, like “helmet: visible: yes; wearing: no”.",
         dependsOn: offUnless("one_query_per_worker", "Ask about all items at once") },
-    ] }, (s) => setting(s)),
-    group({ title: "Re-check of a detected box", fields: [
-      { key: "verify_template", type: "textarea", label: "Re-check question",
-        hint: "{term} is replaced by the item's detect term. Asked about a detected box alone before it counts.",
-        dependsOn: usesVerify },
     ] }, (s) => setting(s)));
 
   // ---- PPE items: one tab per item ------------------------------------------------
@@ -604,7 +581,7 @@ async function buildPlayground(getDraft) {
     const stage = h("div", { class: "pg-stage" }, h("img", { src: r.image ?? pick.url, alt: "Image sent to Moondream" }));
     const steps = [];
     const reasons = { ok: "counts", "other worker": "on another worker", "outside region": "outside the item's region",
-      "wrong size": "wrong size for the item", "re-check said no": "re-check said it isn't one", "not needed": "not needed" };
+      "wrong size": "wrong size for the item", "not needed": "not needed" };
     for (const s of r.steps) {
       if (s.step === "query") {
         if (s.question) steps.push(h("li", {}, h("b", {}, "Asked: "), h("q", {}, s.question)));
@@ -614,12 +591,6 @@ async function buildPlayground(getDraft) {
       } else if (s.step === "overlap") {
         steps.push(h("li", {}, h("b", {}, "Overlap: "),
           `${Math.round(s.share * 100)}% of this worker is covered by others, so the “yes” must be confirmed`));
-      } else if (s.step === "verify") {
-        steps.push(h("li", {}, h("b", {}, "Re-check: "), h("q", {}, s.question), " → ",
-          h("code", {}, JSON.stringify(s.answer)), s.confirmed ? " (confirmed)" : " (not confirmed)"));
-      } else if (s.step === "body_part") {
-        steps.push(h("li", {}, h("b", {}, "Body part: "), h("q", {}, s.question), " → ",
-          h("code", {}, JSON.stringify(s.answer)), s.visible ? " (visible)" : " (not visible, so unverified)"));
       } else if (s.step === "detect") {
         steps.push(h("li", {}, h("b", {}, `Detect “${s.term}”: `),
           `${s.found} found${s.found ? `, ${s.on_worker ? "one counts for this worker" : "none counts"}` : ""}`));
@@ -646,7 +617,7 @@ async function buildPlayground(getDraft) {
   const card = h("section", { class: "card card-pad" },
     h("div", { class: "card-head" }, h("div", {},
       h("h2", {}, "Prompt playground"),
-      h("p", {}, "Check one PPE item on one worker with the settings on this page, saved or not. Violation photos are re-checked exactly as in their run (original frame, same crop and neighbours). Uses 1–4 Moondream calls."))),
+      h("p", {}, "Check one PPE item on one worker with the settings on this page, saved or not. Violation photos are re-checked exactly as in their run (original frame, same crop and neighbours). Uses 1–2 Moondream calls (one detect call is added only when a “yes” comes from a worker who overlaps another)."))),
     h("div", { class: "pg-grid" },
       h("div", { class: "pg-pick" },
         h("label", { class: "label", for: "pg-run" }, "Worker image from a run"),

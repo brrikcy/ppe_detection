@@ -103,6 +103,9 @@ export const api = {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tuning),
     }),
     reset: () => request("/api/dev/tuning", { method: "DELETE" }),
+    setState: (state) => request("/api/dev/state", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state }),
+    }),
     tryPrompt: (form) => request("/api/dev/try", { method: "POST", body: form }),
     // Person detection playground: tests of person-detection settings on a video.
     people: {

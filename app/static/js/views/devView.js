@@ -10,8 +10,15 @@ const ITEM_LABELS = { helmet: "Helmet", vest: "Vest", gloves: "Gloves", boots: "
 // Settings that only matter when another one is on: return why a field is unused, or null.
 const YES_CHECK = "Confirm “yes” when workers overlap";
 const offUnless = (key, label) => (d) => (d[key] ? null : `Not used while “${label}” is off.`);
-// Detected boxes are only used to confirm a “yes” when workers overlap.
-const usesDetect = offUnless("confirm_yes_on_overlap", YES_CHECK);
+// Settings state 1 (the initial prompt) also double-checks every “no”; in state 2 detected boxes are
+// only used to confirm a “yes” when workers overlap.
+const NO_CHECK = "Double-check “no” answers with detect";
+const usesDetect = (d) => (d.settings_state === "1"
+  ? (d.confirm_no_with_detect || d.confirm_yes_on_overlap ? null
+    : `Not used while “${NO_CHECK}” and “${YES_CHECK}” are both off.`)
+  : offUnless("confirm_yes_on_overlap", YES_CHECK)(d));
+const usesBodyPart = (d) => (d.check_body_part ? null : "Not used while “Unverified when the body part can't be seen” is off.");
+const usesVerify = (d) => usesDetect(d) ?? (d.verify_detected_box ? null : "Not used while “Re-ask about the detected box” is off.");
 
 // Each card has groups of rows; `child` rows are indented under the setting they depend on.
 const CARDS = [
@@ -22,10 +29,17 @@ const CARDS = [
       { title: "Unclear answers", fields: [
         f("not_visible_answer", "select", "A “not visible” answer counts as",
           "When Moondream says the part of the body where the item would be worn is hidden, cut off or out of view. Unverified: the item is neither OK nor a violation. Nothing more is asked for it, so it also saves calls.",
-          { options: [["unverified", "Unverified"], ["present", "Present (no violation)"], ["missing", "Missing (violation)"]] }),
+          { options: [["unverified", "Unverified"], ["present", "Present (no violation)"], ["missing", "Missing (violation)"]], only: "2" }),
         f("unclear_answer", "select", "An unclear answer counts as",
-          "When the reply is none of yes, no or not visible (for example “Not sure”). Present avoids false alarms; missing avoids misses.",
+          { 1: "When the reply is neither yes nor no (for example “Not sure”). Present avoids false alarms; missing avoids misses.",
+            2: "When the reply is none of yes, no or not visible (for example “Not sure”). Present avoids false alarms; missing avoids misses." },
           { options: [["present", "Present (no violation)"], ["unverified", "Unverified"], ["missing", "Missing (violation)"]] }),
+      ] },
+      { title: "When Moondream says “no”", only: "1", fields: [
+        f("confirm_no_with_detect", "toggle", NO_CHECK,
+          "A “no” only counts if detect can't find the item on this worker. Off: fewer calls per “no”, and no item found by mistake, but a “no” about a visible worker always counts."),
+        f("check_body_part", "toggle", "Unverified when the body part can't be seen",
+          "If the head (helmet), face (goggles), hands (gloves) or feet (boots) can't be seen on the worker, the item is unverified instead of missing. One call per “no”, with or without the double-check above: detect looks for the body part, or Moondream is asked if the item has a body part question (boots)."),
       ] },
       { title: "When Moondream says “yes”", fields: [
         f("confirm_yes_on_overlap", "toggle", YES_CHECK,
@@ -33,10 +47,14 @@ const CARDS = [
         f("overlap_threshold", "number", "Overlap that needs confirming", "Share of the worker's box covered by other workers.",
           { child: true, min: 0.01, max: 1, step: 0.05, unit: "× box", dependsOn: offUnless("confirm_yes_on_overlap", YES_CHECK) }),
       ] },
-      { title: "Detected boxes", intro: "Used by the overlap check above to decide whether a box detect found counts for this worker.", fields: [
+      { title: "Detected boxes", intro: { 1: "Used by both double-checks above to decide whether a box detect found counts for this worker.",
+          2: "Used by the overlap check above to decide whether a box detect found counts for this worker." }, fields: [
         f("min_region_overlap", "number", "Inside the item's region",
           "Share of a detected box that must lie in the item's region of the worker (set per item). 0 = only its centre counts.",
           { min: 0, max: 1, step: 0.05, unit: "× box", dependsOn: usesDetect }),
+        f("verify_detected_box", "toggle", "Re-ask about the detected box",
+          "Moondream is asked about the box alone before it counts (a cap is not a hard hat). One more call when it applies.",
+          { dependsOn: usesDetect, only: "1" }),
       ] },
       { title: "Which workers are checked", fields: [
         f("crop_padding", "number", "Crop padding",
@@ -102,9 +120,16 @@ const CARDS = [
 const ITEM_ROWS = [
   { key: "question", type: "textarea", label: "Wording", hint: "Replaces {item} in the question template." },
   { key: "detect_term", type: "text", label: "Detect term",
-    hint: "What detect looks for to confirm a “yes” when workers overlap.", dependsOn: usesDetect },
-  { key: "part_name", type: "text", label: "Part named in the prompt",
+    hint: { 1: "What detect looks for to overrule a “no”, or to confirm a “yes” when workers overlap.",
+            2: "What detect looks for to confirm a “yes” when workers overlap." }, dependsOn: usesDetect },
+  { key: "part_name", type: "text", label: "Part named in the prompt", only: "2",
     hint: "Replaces {part} in the question template (“can you clearly see the head?”) and is shown on this item's line in the combined question. Wording only: it makes no check of its own." },
+  { key: "body_part", type: "text", label: "Body part", only: "1",
+    hint: "If detect can't find it on the worker, the item is unverified. Blank = no check. Not used when there is a body part question.",
+    dependsOn: usesBodyPart, blankIsNull: true },
+  { key: "body_part_question", type: "textarea", label: "Body part question", only: "1",
+    hint: "Asked about the worker instead of detecting the body part: anything but “yes” makes the item unverified. For feet, because detect finds “feet” under chairs and behind walls. Blank = use detect.",
+    dependsOn: usesBodyPart, blankIsNull: true },
   { pair: true, label: "Region", hint: "Where on the worker the item may be, as a share of the box height from the top (negative = above the box).",
     dependsOn: usesDetect, parts: [["region_top", "top", -0.5, 1.5, 0.05], ["region_bottom", "bottom", -0.5, 1.5, 0.05]] },
   { pair: true, label: "Detected width", hint: "Plausible width of a detected box, as a share of the worker's box width.",
@@ -140,6 +165,10 @@ export async function renderDev(root) {
   let saved = clone(state.active);
   let draft = clone(state.active);
   const defaults = state.defaults;
+  const S = state.state; // settings state shown: "1" initial prompt, "2" current prompt
+  // A hint, label or intro may differ per state: {1: "...", 2: "..."}.
+  const pick = (v) => (v && typeof v === "object" && !Array.isArray(v) && !(v instanceof Node) ? v[S] : v);
+  const usedHere = (spec) => !spec.only || spec.only === S;
   const controls = []; // {refresh()} for every field, to redraw markers after load/reset
 
   // ---- header and save bar --------------------------------------------------
@@ -156,8 +185,8 @@ export async function renderDev(root) {
     saveBtn.disabled = discardBtn.disabled = !dirty;
     const n = state.changes.length;
     changesNote.textContent = n
-      ? `Saved settings: ${n} change${n === 1 ? "" : "s"} from the defaults. New runs use them; each run keeps a copy of the settings it used.`
-      : "Saved settings are the defaults. New runs use them; each run keeps a copy of the settings it used.";
+      ? `Settings state ${S}: ${n} saved change${n === 1 ? "" : "s"} from its defaults. New runs use them; each run keeps a copy of the settings it used.`
+      : `Settings state ${S} is at its defaults. New runs use it; each run keeps a copy of the settings it used.`;
     controls.forEach((c) => c.refresh());
   }
 
@@ -226,7 +255,8 @@ export async function renderDev(root) {
   }
 
   // parts: [{input, type, get, def, reset}] — one row may hold several inputs (e.g. min and max).
-  function row({ id, label, hint, type, wide, child, dependsOn, warnOnly }, control, parts) {
+  function row({ id, label, hint: hintSpec, type, wide, child, dependsOn, warnOnly }, control, parts) {
+    const hint = pick(hintSpec);
     const dot = h("span", { class: "changed-dot", title: "Changed from the default" });
     const reset = h("button", { type: "button", class: "link-btn", onclick: () => { parts.forEach((p) => p.reset()); refreshBar(); } }, "Reset");
     const note = h("p", { class: warnOnly ? "row-note is-error" : "row-note", hidden: true });
@@ -278,11 +308,13 @@ export async function renderDev(root) {
     return row({ ...spec, id: parts[0].id }, control, parts);
   }
 
-  function group({ title, intro, fields }, render) {
+  function group({ title, intro, fields, only }, render) {
+    const shown = fields.filter(usedHere);
+    if (!shown.length || (only && only !== S)) return null;
     return h("div", { class: "set-group" },
       title ? h("h3", { class: "set-group-title" }, title) : null,
-      intro ? h("p", { class: "hint set-group-intro" }, intro) : null,
-      h("div", { class: "set-rows" }, fields.map(render)));
+      pick(intro) ? h("p", { class: "hint set-group-intro" }, pick(intro)) : null,
+      h("div", { class: "set-rows" }, shown.map(render)));
   }
 
   function card(id, title, intro, ...body) {
@@ -307,15 +339,22 @@ export async function renderDev(root) {
   const promptCard = card("prompts", "Moondream prompts", "What Moondream is asked. Unsaved changes are used by the playground above.",
     group({ title: "Question for each item", fields: [
       { key: "question_template", type: "textarea", label: "Question template",
-        hint: "{item} is replaced by the item's wording and {part} by the part of the body it is worn on, e.g. “the head” (both under PPE items). The default asks for “visible: yes or no; wearing: yes, no or n/a”: visibility is read first, and “wearing” only counts when the part is visible. Other replies count as unclear. A saved template keeps its old wording when the defaults change: use “Reset” on this row to get the new one." },
+        hint: { 1: "{item} is replaced by the item's wording (see PPE items). Keep “Answer only yes or no”: other replies count as unclear.",
+                2: "{item} is replaced by the item's wording and {part} by the part of the body it is worn on, e.g. “the head” (both under PPE items). The default asks for “visible: yes or no; wearing: yes, no or n/a”: visibility is read first, and “wearing” only counts when the part is visible. Other replies count as unclear. A saved template keeps its old wording when the defaults change: use “Reset” on this row to get the new one." } },
     ] }, (s) => setting(s)),
     h("div", { class: "prompt-preview-row" }, h("span", { class: "eyebrow" }, "Sent for"), previewItem, preview),
     group({ title: "One question for all items", fields: [
       { key: "one_query_per_worker", type: "toggle", label: "Ask about all items at once",
         hint: "One request per worker instead of one per item: fewer calls, but answers may be less reliable. Items missing from the reply are asked about on their own." },
       { key: "multi_template", type: "textarea", label: "Question for all items", child: true,
-        hint: "{items} is replaced by one “name: wording” line per item. The reply must name each item followed by its answer, like “helmet: visible: yes; wearing: no”.",
+        hint: { 1: "{items} is replaced by one “name: wording” line per item. The reply must name each item followed by yes or no.",
+                2: "{items} is replaced by one “name: wording” line per item. The reply must name each item followed by its answer, like “helmet: visible: yes; wearing: no”." },
         dependsOn: offUnless("one_query_per_worker", "Ask about all items at once") },
+    ] }, (s) => setting(s)),
+    group({ title: "Re-check of a detected box", only: "1", fields: [
+      { key: "verify_template", type: "textarea", label: "Re-check question",
+        hint: "{term} is replaced by the item's detect term. Asked about a detected box alone before it counts.",
+        dependsOn: usesVerify, only: "1" },
     ] }, (s) => setting(s)));
 
   // ---- PPE items: one tab per item ------------------------------------------------
@@ -328,7 +367,7 @@ export async function renderDev(root) {
     const defObj = () => defaults.items[key];
     panels[key] = h("div", { class: "set-rows item-panel", id: `item-panel-${key}` },
       h("h3", { class: "item-panel-title" }, ITEM_LABELS[key], h("span", { class: "changed-dot", title: "Changed from the default" })),
-      ...ITEM_ROWS.map((r) => (r.pair ? pairSetting(r, obj, defObj, `i-${key}-`) : setting(r, obj, defObj, `i-${key}-`))));
+      ...ITEM_ROWS.filter(usedHere).map((r) => (r.pair ? pairSetting(r, obj, defObj, `i-${key}-`) : setting(r, obj, defObj, `i-${key}-`))));
     const dot = h("span", { class: "changed-dot", title: "Changed from the default" });
     tabButtons[key] = h("button", { type: "button", role: "tab", class: "item-tab", "aria-controls": `item-panel-${key}`,
       onclick: () => selectItem(key) }, ITEM_LABELS[key], dot);
@@ -360,7 +399,7 @@ export async function renderDev(root) {
       h("a", { href: "#dev/people" }, "person detection playground"), ". Changes there are never saved.") : null,
     c.endpointNote ? h("datalist", { id: "md-models" },
       ["moondream3.1-9B-A2B", "moondream3-preview"].map((m) => h("option", { value: m }))) : null,
-    ...c.groups.map((g) => group(g, (s) => setting(s)))));
+    ...c.groups.map((g) => group(g, (s) => setting(s))).filter(Boolean)));
   const cards = { rules: settingCards[0], voting: settingCards[1], requests: settingCards[2], tracking: settingCards[3] };
 
   // ---- Moondream access ------------------------------------------------------------
@@ -420,6 +459,30 @@ export async function renderDev(root) {
     h("button", { type: "button", class: "fold-all", onclick: () => sections.forEach((x) => x.setOpen(true)) }, "Expand all"),
     h("button", { type: "button", class: "fold-all", onclick: () => sections.forEach((x) => x.setOpen(false)) }, "Collapse all"));
 
+  // ---- settings state: the initial prompt (1) or the current one (2) ----------------------
+  const STATES = [
+    ["1", "Initial prompt", "Asks a plain yes/no question. A “no” is double-checked: detect looks for the item, a detected box is re-asked about, and an item whose body part can't be seen is unverified."],
+    ["2", "Current prompt", "The prompt first asks whether the body part is visible, then whether the item is worn. A “no” is final; “not visible” is unverified. No double-checks on a “no”."],
+  ];
+  async function switchState(next) {
+    if (next === S) return;
+    if (!same(draft, saved) && !confirm("Switch settings state? Your unsaved changes will be discarded.")) return;
+    stateButtons.forEach((b) => { b.disabled = true; });
+    try {
+      await api.dev.setState(next);
+      await renderDev(root); // the page is rebuilt for the other state
+    } catch (e) {
+      stateButtons.forEach((b) => { b.disabled = false; });
+      errorBox.replaceChildren(h("h3", {}, "Couldn't switch"), h("p", {}, e.message));
+      errorBox.hidden = false;
+    }
+  }
+  const stateButtons = STATES.map(([v, name]) => h("button", { type: "button", "aria-pressed": String(v === S), onclick: () => switchState(v) },
+    h("b", {}, `State ${v}`), ` · ${name}`));
+  const stateSwitch = h("div", { class: "state-switch" },
+    h("div", { class: "view-switch", role: "group", "aria-label": "Settings state" }, h("span", { class: "eyebrow" }, "Settings"), ...stateButtons),
+    h("p", { class: "hint" }, STATES.find(([v]) => v === S)[2], " New runs and the camera wall use the state selected here; each state keeps its own saved settings."));
+
   const page = h("div", { class: "page dev-page" });
   const viewButtons = [["stacked", "Stacked"], ["list", "List"]].map(([v, label]) => h("button", {
     type: "button", "data-view": v, onclick: () => setView(v) }, label));
@@ -439,6 +502,7 @@ export async function renderDev(root) {
       h("div", { class: "title" },
         h("span", { class: "eyebrow" }, "Developer options"),
         h("h1", {}, "Tune detection"),
+        stateSwitch,
         changesNote),
       h("div", { class: "actions" }, h("a", { class: "btn", href: "#dev/people" }, "Person detection playground"), viewSwitch, resetBtn)),
     h("div", { class: "dev-bar" }, nav, h("div", { class: "actions" }, dirtyPill, discardBtn, saveBtn)),
@@ -581,7 +645,7 @@ async function buildPlayground(getDraft) {
     const stage = h("div", { class: "pg-stage" }, h("img", { src: r.image ?? pick.url, alt: "Image sent to Moondream" }));
     const steps = [];
     const reasons = { ok: "counts", "other worker": "on another worker", "outside region": "outside the item's region",
-      "wrong size": "wrong size for the item", "not needed": "not needed" };
+      "wrong size": "wrong size for the item", "re-check said no": "re-check said it isn't one", "not needed": "not needed" };
     for (const s of r.steps) {
       if (s.step === "query") {
         if (s.question) steps.push(h("li", {}, h("b", {}, "Asked: "), h("q", {}, s.question)));
@@ -591,6 +655,12 @@ async function buildPlayground(getDraft) {
       } else if (s.step === "overlap") {
         steps.push(h("li", {}, h("b", {}, "Overlap: "),
           `${Math.round(s.share * 100)}% of this worker is covered by others, so the “yes” must be confirmed`));
+      } else if (s.step === "verify") {
+        steps.push(h("li", {}, h("b", {}, "Re-check: "), h("q", {}, s.question), " → ",
+          h("code", {}, JSON.stringify(s.answer)), s.confirmed ? " (confirmed)" : " (not confirmed)"));
+      } else if (s.step === "body_part") {
+        steps.push(h("li", {}, h("b", {}, "Body part: "), h("q", {}, s.question), " → ",
+          h("code", {}, JSON.stringify(s.answer)), s.visible ? " (visible)" : " (not visible, so unverified)"));
       } else if (s.step === "detect") {
         steps.push(h("li", {}, h("b", {}, `Detect “${s.term}”: `),
           `${s.found} found${s.found ? `, ${s.on_worker ? "one counts for this worker" : "none counts"}` : ""}`));
@@ -617,7 +687,7 @@ async function buildPlayground(getDraft) {
   const card = h("section", { class: "card card-pad" },
     h("div", { class: "card-head" }, h("div", {},
       h("h2", {}, "Prompt playground"),
-      h("p", {}, "Check one PPE item on one worker with the settings on this page, saved or not. Violation photos are re-checked exactly as in their run (original frame, same crop and neighbours). Uses 1–2 Moondream calls (one detect call is added only when a “yes” comes from a worker who overlaps another)."))),
+      h("p", {}, "Check one PPE item on one worker with the settings on this page, saved or not. Violation photos are re-checked exactly as in their run (original frame, same crop and neighbours). Uses 1–2 Moondream calls in settings state 2 (one detect call is added only when a “yes” comes from a worker who overlaps another), up to 4 in state 1 (the double-checks on a “no”)."))),
     h("div", { class: "pg-grid" },
       h("div", { class: "pg-pick" },
         h("label", { class: "label", for: "pg-run" }, "Worker image from a run"),

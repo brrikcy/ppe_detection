@@ -205,8 +205,9 @@ class KeyCheckResult(BaseModel):
 
 
 class TuningState(BaseModel):
-    active: Tuning  # applied to new runs
-    defaults: Tuning
+    active: Tuning  # applied to new runs: the saved settings of the active state
+    state: str = "2"  # the active settings state: "1" initial prompt, "2" current prompt
+    defaults: Tuning  # the active state's defaults
     changes: list[str]  # dotted names of settings that differ from the defaults
     models: list[str]  # person-detection weights available in models/
     default_model: str

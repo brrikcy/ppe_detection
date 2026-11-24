@@ -12,6 +12,11 @@ Workers are found and tracked locally (ppe.people). For each worker due a check:
   3. Confirmed missing items become the violation list for that worker. An item whose
      calls failed is recorded as failed; the other items still count.
 
+Two settings states exist (ppe.tuning). State 2, above, asks about visibility in the prompt. State 1,
+the initial method, asks only "yes or no" and validates instead: a "no" is confirmed with `detect`
+and re-asked about the detected box, and an item whose body part can't be seen is unverified
+(see _item_status).
+
 Workers too small to judge are not checked.
 """
 
@@ -28,8 +33,11 @@ from PIL import Image
 
 from .config import PPE_CATALOG, Config
 from .moondream_client import AuthError, ModelError
+from .tuning import ItemTuning
 
 log = logging.getLogger(__name__)
+
+VERIFY_PADDING = 0.3  # context around a detected box when asking what it is
 
 
 @dataclass
@@ -215,7 +223,7 @@ class PPEAnalyzer:
         py = (y2 - y1) * self.tuning.crop_padding
         return max(0, x1 - px), max(0, y1 - py), min(w, x2 + px), min(h, y2 + py)
 
-    def _judge_box(self, frame_box, item: str, box, others, region) -> str:
+    def _judge_box(self, frame_box, item: str | None, box, others, region, shape: bool) -> str:
         """Why a detected box (frame pixels) does or doesn't count for this worker: "ok" or a reason."""
         ox1, oy1, ox2, oy2 = frame_box
         centre = ((ox1 + ox2) / 2, (oy1 + oy2) / 2)
@@ -223,52 +231,72 @@ class PPEAnalyzer:
             return "other worker" if _owner(centre, box, others, (-0.5, 1.5)) not in (None, box) else "outside region"
         bx1, by1, bx2, by2 = box
         bw, bh = bx2 - bx1, by2 - by1
-        # Most of the detected box must be in the item's part of this worker, not just its centre.
-        rx1, rx2 = bx1 - 0.1 * bw, bx2 + 0.1 * bw
-        ry1, ry2 = by1 + region[0] * bh, by1 + region[1] * bh
-        inside = max(0, min(ox2, rx2) - max(ox1, rx1)) * max(0, min(oy2, ry2) - max(oy1, ry1))
-        if inside < self.tuning.min_region_overlap * max(1e-6, (ox2 - ox1) * (oy2 - oy1)):
-            return "outside region"
-        spec = self.tuning.items[item]
-        wr, hr = (ox2 - ox1) / max(1, bw), (oy2 - oy1) / max(1, bh)
-        if not (spec.min_width <= wr <= spec.max_width and spec.min_height <= hr <= spec.max_height):
-            return "wrong size"
+        if shape:
+            # Most of the detected box must be in the item's part of this worker, not just its centre.
+            rx1, rx2 = bx1 - 0.1 * bw, bx2 + 0.1 * bw
+            ry1, ry2 = by1 + region[0] * bh, by1 + region[1] * bh
+            inside = max(0, min(ox2, rx2) - max(ox1, rx1)) * max(0, min(oy2, ry2) - max(oy1, ry1))
+            if inside < self.tuning.min_region_overlap * max(1e-6, (ox2 - ox1) * (oy2 - oy1)):
+                return "outside region"
+            spec = self.tuning.items[item]
+            wr, hr = (ox2 - ox1) / max(1, bw), (oy2 - oy1) / max(1, bh)
+            if not (spec.min_width <= wr <= spec.max_width and spec.min_height <= hr <= spec.max_height):
+                return "wrong size"
         return "ok"
 
-    def _found_on_worker(self, crop: Image.Image, crop_box, item: str, box, others,
-                         trace: list | None = None) -> bool:
-        """True if detect() finds the item on this worker rather than elsewhere in the crop.
+    def _verify(self, image: Image.Image, frame_box, item: str, trace: list | None) -> bool:
+        """Asks Moondream whether the detected box really is the item."""
+        x1, y1, x2, y2 = frame_box
+        px, py = (x2 - x1) * VERIFY_PADDING, (y2 - y1) * VERIFY_PADDING
+        w, h = image.size
+        crop = image.crop((max(0, x1 - px), max(0, y1 - py), min(w, x2 + px), min(h, y2 + py)))
+        question = self.tuning.verify_question_for(item)
+        answer = self._call(self.model.query, crop, question).get("answer", "")
+        verdict = _is_yes(answer) is True
+        if trace is not None:
+            trace.append({"step": "verify", "question": question, "answer": answer, "confirmed": verdict})
+        return verdict
 
-        A box must be mostly in the item's region of the worker, not on a neighbour, and have a
-        plausible size for the item.
+    def _found_on_worker(self, image: Image.Image, crop: Image.Image, crop_box, term: str, box, others,
+                         region: tuple[float, float], item: str | None = None,
+                         trace: list | None = None) -> bool:
+        """True if detect() finds `term` on this worker rather than elsewhere in the crop.
+
+        With `item` set (the PPE item itself, not a body part), a box must also be mostly in
+        the item's region, have a plausible size and, if enabled, be confirmed by Moondream.
         """
-        spec = self.tuning.items[item]
         cx1, cy1, cx2, cy2 = crop_box
         cw, ch = cx2 - cx1, cy2 - cy1
-        objects = self._call(self.model.detect, crop, spec.detect_term).get("objects", [])
+        objects = self._call(self.model.detect, crop, term).get("objects", [])
         found = False
         for o in objects:
             # Normalised crop coordinates -> frame pixels.
             fb = (cx1 + o["x_min"] * cw, cy1 + o["y_min"] * ch, cx1 + o["x_max"] * cw, cy1 + o["y_max"] * ch)
-            step = {"step": "detect_object", "term": spec.detect_term, "box": o, "on_worker": False,
-                    "reason": "not needed"}
+            step = {"step": "detect_object", "term": term, "box": o, "on_worker": False, "reason": "not needed"}
             if trace is not None:
                 trace.append(step)
             if found:
                 continue  # one is enough
-            step["reason"] = self._judge_box(fb, item, box, others, spec.region)
+            step["reason"] = self._judge_box(fb, item, box, others, region, shape=item is not None)
+            if (step["reason"] == "ok" and item is not None and self.tuning.verify_detected_box
+                    and not self._verify(image, fb, item, trace)):
+                step["reason"] = "re-check said no"
             step["on_worker"] = found = step["reason"] == "ok"
         if trace is not None:
-            trace.append({"step": "detect", "term": spec.detect_term, "found": len(objects), "on_worker": found})
+            trace.append({"step": "detect", "term": term, "found": len(objects), "on_worker": found})
         return found
 
-    def _item_status(self, crop: Image.Image, crop_box, item: str, box, others,
+    def _item_status(self, image: Image.Image, crop: Image.Image, crop_box, item: str, box, others,
                      trace: list | None = None, answer: str | None = None) -> str:
         """Returns "present", "missing" or "unverified". If `trace` is a list, each step is appended.
 
         `answer` is this item's reply when it was already asked as part of one question for all items.
+
+        The double-checks on a "no" (detect, re-asking about a detected box, the body-part check) are
+        the initial method's (settings state 1); they are off in the current one (state 2), where the
+        prompt itself asks whether the body part is visible.
         """
-        t = self.tuning
+        t, spec = self.tuning, self.tuning.items[item]
         if answer is None:
             question = t.question_for(item)
             answer = self._call(self.model.query, crop, question).get("answer", "")
@@ -294,11 +322,32 @@ class PPEAnalyzer:
             # The crop shows a neighbour too, and the "yes" may be about them.
             if trace is not None:
                 trace.append({"step": "overlap", "share": round(share, 2)})
-            if self._found_on_worker(crop, crop_box, item, box, others, trace):
+            if self._found_on_worker(image, crop, crop_box, spec.detect_term, box, others, spec.region, item, trace):
                 return "present"
             return "unverified"
-        # "No": the part was seen (or the prompt doesn't ask about it) and the item isn't on it.
+        # "No". The query model says "no" too eagerly on occluded or cut-off workers, so the initial
+        # method confirms before flagging a violation.
+        if t.confirm_no_with_detect and self._found_on_worker(
+                image, crop, crop_box, spec.detect_term, box, others, spec.region, item, trace):
+            return "present"
+        # Checked even without the detect above: a "no" about hidden feet is no violation.
+        if t.check_body_part and not self._body_part_visible(image, crop, crop_box, spec, box, others, trace):
+            return "unverified"
         return "missing"
+
+    def _body_part_visible(self, image: Image.Image, crop: Image.Image, crop_box, spec: ItemTuning, box, others,
+                           trace: list | None) -> bool:
+        """Whether the body part the item belongs on can be seen; True if the item names none."""
+        if spec.body_part_question:
+            answer = self._call(self.model.query, crop, spec.body_part_question).get("answer", "")
+            visible = _is_yes(answer) is True
+            if trace is not None:
+                trace.append({"step": "body_part", "question": spec.body_part_question, "answer": answer,
+                              "visible": visible})
+            return visible
+        if spec.body_part:
+            return self._found_on_worker(image, crop, crop_box, spec.body_part, box, others, spec.region, None, trace)
+        return True
 
     def explain_item(self, image: Image.Image, item: str, box=None, others=()) -> dict:
         """Check one PPE item and return every step (for tuning).
@@ -313,7 +362,7 @@ class PPEAnalyzer:
             crop_box = self._crop_box(image, box)
             crop = image.crop(crop_box)
         trace: list = []
-        status = self._item_status(crop, crop_box, item, tuple(box), [tuple(o) for o in others], trace)
+        status = self._item_status(image, crop, crop_box, item, tuple(box), [tuple(o) for o in others], trace)
         return {"item": item, "status": status, "steps": trace, "crop": crop}
 
     def _answers_together(self, crop: Image.Image, items: list[str]) -> dict[str, str]:
@@ -336,7 +385,7 @@ class PPEAnalyzer:
         items = list(self.config.required_ppe)
         answers = self._answers_together(crop, items) if self.tuning.one_query_per_worker and len(items) > 1 else {}
         futures = {
-            item: self._pool.submit(self._item_status, crop, crop_box, item, box, others,
+            item: self._pool.submit(self._item_status, image, crop, crop_box, item, box, others,
                                     None, answers.get(item))
             for item in items
         }

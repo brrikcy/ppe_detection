@@ -14,6 +14,19 @@ from .moondream_client import DEFAULT_MODEL
 
 MODEL_SUFFIXES = (".pt", ".engine", ".onnx")  # person-detection weights Ultralytics can load
 
+# Settings state 1: the initial prompts (a plain yes/no question, validated by the double-checks).
+INITIAL_QUESTION_TEMPLATE = (
+    "Focus on the main person in the centre of this image. "
+    "Is this person wearing {item}? Answer only yes or no."
+)
+INITIAL_VERIFY_TEMPLATE = "Is this a {term}? Answer only yes or no."
+INITIAL_MULTI_TEMPLATE = (
+    "Focus on the main person in the centre of this image. "
+    "For each line, answer yes or no:\n{items}\n"
+    "Reply with one line per item, like helmet: yes"
+)
+
+# Settings state 2: the prompt asks about visibility first.
 DEFAULT_QUESTION_TEMPLATE = (
     "Focus on the main person in the centre of this image. "
     "Step 1: can you clearly see {part}? "
@@ -36,6 +49,11 @@ class ItemTuning(BaseModel):
     # Where the item is worn, as named in the prompt: fills {part} in the question template ("can you
     # clearly see the head?") and is shown on each line of the combined question. Wording only.
     part_name: str = Field("the part of the body it is worn on", min_length=1, max_length=80)
+    # Settings state 1 only (the initial method): if the body part the item is worn on can't be found
+    # on the worker (detect), the item is unverified instead of missing. Blank = no check.
+    body_part: str | None = Field(None, max_length=80)
+    # Asked about the crop instead of detecting body_part; anything but "yes" makes the item unverified.
+    body_part_question: str | None = Field(None, max_length=300)
     # Where on the worker the item sits, as fractions of the person box height from the top.
     region_top: float = Field(0.0, ge=-0.5, le=1.5)
     region_bottom: float = Field(1.0, ge=-0.5, le=1.5)
@@ -54,6 +72,11 @@ class ItemTuning(BaseModel):
         if not v:
             raise ValueError("must not be empty")
         return v
+
+    @field_validator("body_part", "body_part_question")
+    @classmethod
+    def _blank_is_none(cls, v: str | None) -> str | None:
+        return (v or "").strip() or None
 
     @model_validator(mode="after")
     def _region_order(self) -> "ItemTuning":
@@ -84,14 +107,38 @@ DEFAULT_ITEMS: dict[str, ItemTuning] = {
                           part_name="the face", region_top=-0.05, region_bottom=0.35,
                           min_width=0.02, max_width=0.7, min_height=0.005, max_height=0.15),
 }
+# The initial method's items (settings state 1): the same wording and regions, plus the body part
+# each item belongs on. Detect finds a "foot" in a dark patch under a chair or behind a wall, so for
+# feet Moondream is asked instead.
+INITIAL_ITEMS: dict[str, ItemTuning] = {
+    "helmet": DEFAULT_ITEMS["helmet"].model_copy(update={"body_part": "head"}),
+    "vest": DEFAULT_ITEMS["vest"].model_copy(),
+    "gloves": DEFAULT_ITEMS["gloves"].model_copy(update={"body_part": "hand"}),
+    "boots": DEFAULT_ITEMS["boots"].model_copy(update={
+        "body_part": "foot",
+        "body_part_question": ("Focus on the main person in the centre of this image. "
+                               "Are this person's feet visible? Answer only yes or no.")}),
+    "goggles": DEFAULT_ITEMS["goggles"].model_copy(update={"body_part": "face"}),
+}
+
+SETTINGS_STATES = ("1", "2")
+
 # Items no longer offered. Settings saved before their removal (and the copies kept by old
 # runs) still load: these entries are dropped instead of rejected.
 RETIRED_ITEMS = ("mask",)
 
 
 class Tuning(BaseModel):
+    # Which method these settings are: "1", the initial prompt (a yes/no question, with the
+    # double-checks on its answers), or "2", the current one (the prompt asks whether the body
+    # part is visible). It only labels the settings: what each does is set by the fields below.
+    # Use Tuning.for_state() for a state's defaults.
+    settings_state: Literal["1", "2"] = "2"
+
     # --- Moondream prompts ---------------------------------------------------
     question_template: str = Field(DEFAULT_QUESTION_TEMPLATE, min_length=1, max_length=1000)
+    # Settings state 1: asked about a detected box before it overrules a "no" ({term} = the item's detect term).
+    verify_template: str = Field(INITIAL_VERIFY_TEMPLATE, min_length=1, max_length=500)
     # One question for all items of a worker ({items} = one "name: wording" line per item).
     one_query_per_worker: bool = False
     multi_template: str = Field(DEFAULT_MULTI_TEMPLATE, min_length=1, max_length=1500)
@@ -104,6 +151,10 @@ class Tuning(BaseModel):
     # a violation nor OK. Nothing else is asked for it: the answer already says it.
     not_visible_answer: Literal["present", "unverified", "missing"] = "unverified"
     min_region_overlap: float = Field(0.6, ge=0, le=1)  # share of a detected box inside the item's region
+    # Settings state 1's double-checks (off in state 2, where the prompt asks about visibility):
+    confirm_no_with_detect: bool = False  # a "no" only counts if detect() can't find the item either
+    verify_detected_box: bool = False  # re-ask Moondream about a detected box before it overrules a "no"
+    check_body_part: bool = False  # item unverified (not missing) when its body part can't be seen
     # A "yes" for a worker who overlaps a neighbour may be about the neighbour: confirm it with detect.
     confirm_yes_on_overlap: bool = True
     overlap_threshold: float = Field(0.2, ge=0.01, le=1)  # share of the worker's box covered by others
@@ -141,6 +192,13 @@ class Tuning(BaseModel):
     def _template_has_item(cls, v: str) -> str:
         if "{item}" not in v:
             raise ValueError("must contain {item}, where the item's question goes")
+        return v
+
+    @field_validator("verify_template")
+    @classmethod
+    def _template_has_term(cls, v: str) -> str:
+        if "{term}" not in v:
+            raise ValueError("must contain {term}, where the item's detect term goes")
         return v
 
     @field_validator("multi_template")
@@ -197,9 +255,30 @@ class Tuning(BaseModel):
         spec = self.items[item]
         return self.question_template.replace("{item}", spec.question).replace("{part}", spec.part_name)
 
+    def verify_question_for(self, item: str) -> str:
+        return self.verify_template.replace("{term}", self.items[item].detect_term)
+
     def multi_question_for(self, items: list[str]) -> str:
-        lines = "\n".join(f"{i}: {self.items[i].question} (body part: {self.items[i].part_name})" for i in items)
+        # Each line names the body part when the template talks about body parts (state 2's does).
+        parts = "body part" in self.multi_template.lower()
+        lines = "\n".join(f"{i}: {self.items[i].question}" + (f" (body part: {self.items[i].part_name})" if parts else "")
+                          for i in items)
         return self.multi_template.replace("{items}", lines)
+
+    @classmethod
+    def for_state(cls, state: str) -> "Tuning":
+        """The defaults of settings state "1" (initial prompt) or "2" (current prompt)."""
+        if state == "2":
+            return cls()
+        if state != "1":
+            raise ValueError(f"unknown settings state {state!r}")
+        return cls(
+            settings_state="1",
+            question_template=INITIAL_QUESTION_TEMPLATE,
+            verify_template=INITIAL_VERIFY_TEMPLATE,
+            multi_template=INITIAL_MULTI_TEMPLATE,
+            items={k: v.model_copy() for k, v in INITIAL_ITEMS.items()},
+            confirm_no_with_detect=True, verify_detected_box=True, check_body_part=True)
 
     def min_check_height(self, frame_height: int) -> float:
         """Workers shorter than this (in pixels) are too far away to check."""
@@ -207,7 +286,7 @@ class Tuning(BaseModel):
 
     def changes(self) -> list[str]:
         """Dotted names of the settings that differ from the defaults."""
-        return _diff(self.model_dump(), Tuning().model_dump())
+        return _diff(self.model_dump(), Tuning.for_state(self.settings_state).model_dump())
 
 
 # The settings that decide who is found, tracked and then checked for PPE: what the person

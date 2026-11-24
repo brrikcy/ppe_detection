@@ -63,6 +63,18 @@ export const api = {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   }),
 
+  cameras: {
+    state: () => request("/api/cameras"),
+    start: (body) => request("/api/cameras/start", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }),
+    remove: (id) => request(`/api/cameras/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    stopAll: () => request("/api/cameras/stop-all", { method: "POST" }),
+    reportUrl: "/api/cameras/report",
+    clearViolations: () => request("/api/cameras/violations", { method: "DELETE" }),
+    live: (id, size) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/cameras/${encodeURIComponent(id)}/live?size=${size}`,
+  },
+
   checkKey(apiKey) {
     const form = new FormData();
     if (apiKey) form.append("api_key", apiKey);
@@ -92,6 +104,9 @@ export const api = {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tuning),
     }),
     reset: () => request("/api/dev/tuning", { method: "DELETE" }),
+    setState: (state) => request("/api/dev/state", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state }),
+    }),
     tryPrompt: (form) => request("/api/dev/try", { method: "POST", body: form }),
     // Person detection playground: tests of person-detection settings on a video.
     people: {

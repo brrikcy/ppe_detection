@@ -52,18 +52,26 @@ class LiveFeed:
     Frames are only encoded while someone is watching.
     """
 
-    def __init__(self):
+    def __init__(self, max_width: int = STREAM_MAX_WIDTH, quality: int = STREAM_JPEG_QUALITY, fps: float = 0):
         self._cond = threading.Condition()
         self._jpeg: bytes | None = None
         self._seq = 0
         self._closed = False
+        self._max_width, self._quality = max_width, quality
+        self._min_gap = 1 / fps if fps else 0.0  # camera wall tiles: at most this many frames a second
+        self._last_push = 0.0
         self.viewers = 0
 
     def push(self, img) -> None:
+        if self._min_gap:
+            now = time.monotonic()
+            if now - self._last_push < self._min_gap:
+                return
+            self._last_push = now
         h, w = img.shape[:2]
-        if w > STREAM_MAX_WIDTH:
-            img = cv2.resize(img, (STREAM_MAX_WIDTH, int(h * STREAM_MAX_WIDTH / w)), interpolation=cv2.INTER_AREA)
-        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, STREAM_JPEG_QUALITY])
+        if w > self._max_width:
+            img = cv2.resize(img, (self._max_width, int(h * self._max_width / w)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, self._quality])
         if not ok:
             return
         with self._cond:
@@ -74,6 +82,10 @@ class LiveFeed:
         with self._cond:
             self._closed = True
             self._cond.notify_all()
+
+    def reopen(self) -> None:
+        with self._cond:
+            self._closed = False
 
     @contextmanager
     def watching(self):

@@ -23,6 +23,11 @@ from .status import PersonStatus
 
 log = logging.getLogger(__name__)
 
+
+class Stopped(Exception):
+    """process_video was stopped by its `stop` event before the video ended."""
+
+
 EDGE_PX = 2  # a box this close to the frame edge is (probably) cut off
 ARRIVAL_CUTOFF_SEC = 0.5  # no arrival check when the next regular check is this close
 CHECKS_IN_FLIGHT = 2  # check frames sent to Moondream at once (calls stay capped by parallel_requests)
@@ -90,7 +95,7 @@ class _Output:
     stall, playback carries on from where it is instead of fast-forwarding to catch up.
     """
 
-    def __init__(self, writer: FrameWriter, fps: float, total: int, realtime: bool,
+    def __init__(self, writer: FrameWriter | None, fps: float, total: int, realtime: bool,
                  on_frame: Callable | None, on_progress: Callable | None):
         self._writer, self._fps, self._total, self._realtime = writer, fps, total, realtime
         self._on_frame, self._on_progress = on_frame, on_progress
@@ -119,7 +124,8 @@ class _Output:
                         clock = now - idx / self._fps
                     else:
                         time.sleep(max(0.0, clock + idx / self._fps - now))
-                self._writer.write(annotated)
+                if self._writer is not None:
+                    self._writer.write(annotated)
                 if self._on_frame:
                     self._on_frame(idx, annotated)
                 self.written = done = idx + 1
@@ -170,6 +176,10 @@ def process_video(
     on_start: Callable[[int, int], None] | None = None,
     live: bool = False,
     max_label_delay_sec: float = LABEL_DELAY_SEC,
+    record: bool = True,
+    stop: threading.Event | None = None,
+    max_height: int | None = None,
+    sample_every: int = 1,
 ) -> dict:
     """Annotate `input_path` into `output_path` and return the report dict.
 
@@ -201,12 +211,20 @@ def process_video(
       the statuses so far and the results apply from the frame where they arrive. A check
       is skipped while CHECKS_IN_FLIGHT others are still out, so they never pile up. Video
       taller than LIVE_MAX_HEIGHT is processed (and written) at that height.
+
+    With `record=False` nothing is written to disk (no output video, no report file): frames
+    only go to `on_frame` and the report dict is only returned (a camera feed that loops the
+    video). `stop` ends the run early: Stopped is raised. `max_height` overrides LIVE_MAX_HEIGHT.
+    `sample_every` = n processes only every n-th frame, as a video of fps / n (fewer frames for
+    a feed that doesn't need all of them).
     """
     input_path, output_path = Path(input_path), Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if record:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # In live mode 4K is too slow to decode, draw and encode at the video's speed; 1080p is plenty.
-    reader = FrameReader(input_path, max_height=LIVE_MAX_HEIGHT if live else None)
+    reader = FrameReader(input_path, max_height=max_height or (LIVE_MAX_HEIGHT if live else None),
+                         every=sample_every)
     fps, width, height, total = reader.fps, reader.width, reader.height, reader.frame_count
     if on_start:
         on_start(width, height)
@@ -232,7 +250,8 @@ def process_video(
         people = tracker_from_tuning(tun, fps, cfg.person_model)
     else:
         people = people_factory(fps)
-    writer = FrameWriter(output_path, width, height, fps, audio_source=input_path, max_seconds=max_seconds)
+    writer = (FrameWriter(output_path, width, height, fps, audio_source=input_path, max_seconds=max_seconds)
+              if record else None)
     frames = _Prefetch(reader, total)
     output = _Output(writer, fps, total, realtime=live, on_frame=on_frame, on_progress=on_progress)
     checks = ThreadPoolExecutor(max_workers=CHECKS_IN_FLIGHT, thread_name_prefix="check")
@@ -328,6 +347,8 @@ def process_video(
     idx = 0
     try:
         while (frame := frames.get()) is not None:
+            if stop is not None and stop.is_set():
+                raise Stopped()
             tracked = people.update(frame)
             on_screen = [p for p in tracked if not getattr(p, "coasting", False)]
             for p in on_screen:
@@ -380,10 +401,12 @@ def process_video(
         if counts["worker_checks"] and counts["failed_checks"] == counts["worker_checks"]:
             raise RuntimeError(f"Moondream analysis failed on every check. Last error: {last_error}")
         output.close()
-        writer.close()
+        if writer is not None:
+            writer.close()
     except BaseException:
         output.abort()
-        writer.abort()
+        if writer is not None:
+            writer.abort()
         raise
     finally:
         checks.shutdown(wait=False, cancel_futures=True)
@@ -410,9 +433,10 @@ def process_video(
         "tuning": tun.model_dump(),
         "timeline": timeline,
     }
-    report_path = output_path.with_suffix(".json")
-    report_path.write_text(json.dumps(report, indent=2))
-    log.info("Wrote %s and %s", output_path, report_path)
+    if record:
+        report_path = output_path.with_suffix(".json")
+        report_path.write_text(json.dumps(report, indent=2))
+        log.info("Wrote %s and %s", output_path, report_path)
     return report
 
 

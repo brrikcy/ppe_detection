@@ -7,6 +7,7 @@ from __future__ import annotations
 from fastapi.requests import HTTPConnection
 
 from ..core.settings import Settings
+from ..services.cameras import CameraManager
 from ..services.dev_settings import DevSettingsStore
 from ..services.keys import KeyVerifier
 from ..services.media import VideoConverter
@@ -37,6 +38,10 @@ def get_video_converter(request: HTTPConnection) -> VideoConverter:
 
 def get_dev_settings(request: HTTPConnection) -> DevSettingsStore:
     return request.app.state.dev_settings
+
+
+def get_cameras(request: HTTPConnection) -> CameraManager:
+    return request.app.state.cameras
 
 
 def get_people_lab(request: HTTPConnection) -> PeoplePlayground:

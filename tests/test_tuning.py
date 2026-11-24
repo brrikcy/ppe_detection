@@ -87,19 +87,16 @@ def test_unclear_answer_rule(rule):
     assert analyze(Tuning(unclear_answer=rule), Recording(answer="maybe"))["status"] == rule
 
 
-def test_settings_saved_with_the_removed_checks_still_load():
-    # Settings and run copies saved before the double-check on "no", the re-check question and the
-    # body-part check were removed: those fields are ignored instead of rejected.
+def test_state_2_has_the_double_checks_off():
+    # Settings saved by the version that had them keep loading; in state 2 they are off by default.
     old = Tuning().model_dump()
-    old.update(confirm_no_with_detect=False, verify_detected_box=False, check_body_part=False,
-               verify_template="Is this a {term}? Answer only yes or no.", crop_padding=0.2)
-    old["items"]["helmet"].update(body_part="head", body_part_question="Is the head visible?")
+    old.update(confirm_no_with_detect=False, verify_detected_box=False, check_body_part=False, crop_padding=0.2)
     t = Tuning.model_validate(old)
     assert t.changes() == ["crop_padding"]
-    assert not hasattr(t, "check_body_part") and not hasattr(t.items["helmet"], "body_part")
+    assert not (t.confirm_no_with_detect or t.verify_detected_box or t.check_body_part)
 
 
-def test_the_overlap_check_is_the_only_detect_check_left():
+def test_in_state_2_the_overlap_check_is_the_only_detect_check():
     # "No" is final, "not visible" asks nothing more, and a "yes" is only confirmed when workers overlap.
     steps = analyze(Tuning(), Recording())["steps"]
     assert [s["step"] for s in steps] == ["query"]

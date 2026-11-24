@@ -2,6 +2,7 @@
 
 import { api, ServerUnreachable } from "./api.js";
 import { fmt, h, plural, statusPill } from "./ui.js";
+import { renderCameras } from "./views/camerasView.js";
 import { renderDev } from "./views/devView.js";
 import { renderNewRun } from "./views/newRun.js";
 import { renderPeoplePlayground } from "./views/peoplePlayground.js";
@@ -12,6 +13,7 @@ const list = document.getElementById("runs-list");
 const count = document.getElementById("runs-count");
 const devLink = document.getElementById("dev-link");
 const newLink = document.getElementById("new-link");
+const camLink = document.getElementById("cam-link");
 
 let cleanup = () => {};
 let sidebarTimer = null;
@@ -19,6 +21,7 @@ let sidebarTimer = null;
 function currentRoute() {
   const hash = location.hash.slice(1);
   if (hash.startsWith("run/")) return { name: "run", id: decodeURIComponent(hash.slice(4)) };
+  if (hash === "cameras") return { name: "cameras" };
   if (hash === "dev") return { name: "dev" };
   if (hash === "dev/people") return { name: "devPeople" };
   return { name: "new" };
@@ -35,6 +38,7 @@ async function refreshSidebar() {
   }
   const route = currentRoute();
   devLink.setAttribute("aria-current", route.name === "dev" || route.name === "devPeople" ? "page" : "false");
+  camLink?.setAttribute("aria-current", route.name === "cameras" ? "page" : "false");
   newLink?.setAttribute("aria-current", route.name === "new" ? "page" : "false"); // absent in a page cached from an older version
   count.textContent = runs.length ? String(runs.length) : "";
   list.replaceChildren(...(runs.length ? runs.map((r) => {
@@ -62,7 +66,9 @@ async function route() {
   const r = currentRoute();
   view.scrollTop = 0;
   try {
-    if (r.name === "dev") {
+    if (r.name === "cameras") {
+      cleanup = await renderCameras(view);
+    } else if (r.name === "dev") {
       cleanup = await renderDev(view);
     } else if (r.name === "devPeople") {
       cleanup = await renderPeoplePlayground(view);

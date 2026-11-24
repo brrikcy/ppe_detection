@@ -12,12 +12,12 @@ import cv2
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from PIL import Image, UnidentifiedImageError
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from ppe.config import PPE_CATALOG, Config
 from ppe.moondream_client import AuthError, ModelError
 from ppe.people import DEFAULT_MODEL, MODELS_DIR
-from ppe.tuning import MODEL_SUFFIXES, Tuning
+from ppe.tuning import MODEL_SUFFIXES, SETTINGS_STATES, Tuning
 
 from ...core.settings import Settings
 from ...schemas.runs import TryRequestResult, TuningState
@@ -38,7 +38,8 @@ MAX_TRY_IMAGE_BYTES = 20 * 1024 * 1024
 def _state(active: Tuning, settings: Settings) -> TuningState:
     return TuningState(
         active=active,
-        defaults=Tuning(),
+        state=active.settings_state,
+        defaults=Tuning.for_state(active.settings_state),
         changes=active.changes(),
         models=sorted(p.name for p in MODELS_DIR.iterdir() if p.suffix in MODEL_SUFFIXES) if MODELS_DIR.exists() else [],
         default_model=Path(settings.person_model or DEFAULT_MODEL).name,
@@ -58,6 +59,18 @@ def put_tuning(tuning: Tuning, dev: DevStore,
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
                             f"Model file models/{tuning.person_model} doesn't exist")
     return _state(dev.save(tuning), settings)
+
+
+class StateRequest(BaseModel):
+    state: str
+
+
+@router.put("/state", response_model=TuningState)
+def put_state(body: StateRequest, dev: DevStore, settings: Annotated[Settings, Depends(get_settings)]) -> TuningState:
+    """Switches the settings state new runs use (each state keeps its own saved settings)."""
+    if body.state not in SETTINGS_STATES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"state must be one of {', '.join(SETTINGS_STATES)}")
+    return _state(dev.set_active(body.state), settings)
 
 
 @router.delete("/tuning", response_model=TuningState)

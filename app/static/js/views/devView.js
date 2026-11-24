@@ -114,6 +114,17 @@ const CARDS = [
     intro: "YOLO finds people on every frame; BoT-SORT keeps their IDs.",
     groups: TRACKING_GROUPS,
   },
+  {
+    id: "cameras", nav: "Live cameras", title: "Live cameras",
+    intro: "The simulated cameras on the camera wall (Live cameras in the sidebar).",
+    groups: [
+      { fields: [
+        f("camera_loops", "number", "Loops per camera",
+          "How many times each camera plays its video before it stops by itself (a stopped camera can be resumed from the wall). 0 = on repeat until it is stopped or removed. Applies to cameras started after saving.",
+          { min: 0, max: 10000, step: 1, unit: "loops (0 = endless)" }),
+      ] },
+    ],
+  },
 ];
 
 // Per-item settings, shown one item at a time.
@@ -400,7 +411,8 @@ export async function renderDev(root) {
     c.endpointNote ? h("datalist", { id: "md-models" },
       ["moondream3.1-9B-A2B", "moondream3-preview"].map((m) => h("option", { value: m }))) : null,
     ...c.groups.map((g) => group(g, (s) => setting(s))).filter(Boolean)));
-  const cards = { rules: settingCards[0], voting: settingCards[1], requests: settingCards[2], tracking: settingCards[3] };
+  const cards = { rules: settingCards[0], voting: settingCards[1], requests: settingCards[2], tracking: settingCards[3],
+    cameras: settingCards[4] };
 
   // ---- Moondream access ------------------------------------------------------------
   const accessCard = await buildAccess();
@@ -445,12 +457,13 @@ export async function renderDev(root) {
     controls.push({ refresh: refreshCount });
     return { id, body, setOpen };
   }
-  const sections = [accessCard, playground, promptCard, itemsCard, cards.rules, cards.voting, cards.requests, cards.tracking]
+  const sections = [accessCard, playground, promptCard, itemsCard, cards.rules, cards.voting, cards.requests, cards.tracking,
+    cards.cameras]
     .map(collapsible);
 
   const nav = h("nav", { class: "dev-nav", "aria-label": "Sections" },
     [["access", "Access"], ["playground", "Playground"], ["prompts", "Prompts"], ["items", "PPE items"], ["rules", "Decision rules"],
-      ["voting", "Status and voting"], ["requests", "Requests"], ["tracking", "Tracking"]]
+      ["voting", "Status and voting"], ["requests", "Requests"], ["tracking", "Tracking"], ["cameras", "Live cameras"]]
       .map(([id, label]) => h("button", { type: "button", onclick: () => {
         sections.find((x) => x.id === id)?.setOpen(true);
         document.getElementById(`dev-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -511,7 +524,7 @@ export async function renderDev(root) {
     playground,
     promptCard,
     itemsCard,
-    cards.rules, cards.voting, cards.requests, cards.tracking);
+    cards.rules, cards.voting, cards.requests, cards.tracking, cards.cameras);
   root.replaceChildren(page);
   setView(view);
   refreshBar();

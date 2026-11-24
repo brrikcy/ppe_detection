@@ -148,3 +148,63 @@ def test_state_includes_analytics_and_clear_resets_them(client):
     client.delete("/api/cameras/left_corner_2")
     client.delete("/api/cameras/violations")
     assert client.get("/api/cameras").json()["analytics"]["kpis"]["violations"] == 0
+
+
+def _cam(client, cid):
+    return next(c for c in client.get("/api/cameras").json()["cameras"] if c["id"] == cid)
+
+
+def test_a_camera_can_be_stopped_and_resumed_and_stays_on_the_wall(client):
+    client.post("/api/cameras/start", json={"camera_ids": ["left_corner_2", "parking"], "analysis_interval_sec": 0.5})
+    _wait(lambda: _cam(client, "left_corner_2").get("state") == "live")
+    assert client.post("/api/cameras/left_corner_2/stop").status_code == 204
+    cam = _cam(client, "left_corner_2")
+    assert cam["active"] and cam["state"] == "stopped"
+    totals = client.get("/api/cameras").json()["totals"]
+    assert totals["on_wall"] == 2 and totals["live"] == 1  # the other camera still runs
+    # A stopped camera's stream is over, and it stays stopped (the state doesn't flip back to live).
+    import time as _t
+
+    _t.sleep(1.2)
+    assert _cam(client, "left_corner_2")["state"] == "stopped"
+    # Stopping again is fine; an unknown camera isn't.
+    assert client.post("/api/cameras/left_corner_2/stop").status_code == 204
+    assert client.post("/api/cameras/entrance/stop").status_code == 404
+
+    assert client.post("/api/cameras/left_corner_2/resume").status_code == 204
+    _wait(lambda: _cam(client, "left_corner_2").get("state") == "live")
+    assert client.post("/api/cameras/left_corner_2/resume").status_code == 409  # already running
+    assert client.get("/api/cameras").json()["totals"]["live"] == 2
+
+
+def test_stop_and_resume_monitoring_for_every_camera(client):
+    client.post("/api/cameras/start", json={"camera_ids": ["left_corner_2", "parking"], "analysis_interval_sec": 0.5})
+    _wait(lambda: client.get("/api/cameras").json()["totals"]["live"] == 2)
+    assert client.post("/api/cameras/stop-monitoring").status_code == 204
+    t = client.get("/api/cameras").json()["totals"]
+    assert t["on_wall"] == 2 and t["live"] == 0
+    assert client.post("/api/cameras/resume-monitoring").status_code == 204
+    _wait(lambda: client.get("/api/cameras").json()["totals"]["live"] == 2)
+
+
+def test_a_camera_stops_by_itself_after_the_set_number_of_loops(client):
+    from app.services.dev_settings import DevSettingsStore  # noqa: F401
+
+    tuning = client.get("/api/dev/tuning").json()["active"]
+    tuning["camera_loops"] = 2
+    assert client.put("/api/dev/tuning", json=tuning).status_code == 200
+    client.post("/api/cameras/start", json={"camera_ids": ["left_corner_2"], "analysis_interval_sec": 0.5})
+    cam = _wait(lambda: (lambda c: c if c.get("state") == "finished" else None)(_cam(client, "left_corner_2")), timeout=40)
+    assert cam["run_loops"] == 2 and cam["max_loops"] == 2 and cam["loop"] == 2
+    assert client.get("/api/cameras").json()["totals"]["live"] == 0
+    # Resuming plays the set number of loops again.
+    assert client.post("/api/cameras/left_corner_2/resume").status_code == 204
+    cam = _wait(lambda: (lambda c: c if c.get("state") == "finished" and c["loop"] == 4 else None)(_cam(client, "left_corner_2")), timeout=40)
+    assert cam["run_loops"] == 2
+
+
+def test_camera_loops_setting_is_validated(client):
+    tuning = client.get("/api/dev/tuning").json()["active"]
+    assert tuning["camera_loops"] == 0
+    tuning["camera_loops"] = -1
+    assert client.put("/api/dev/tuning", json=tuning).status_code == 422

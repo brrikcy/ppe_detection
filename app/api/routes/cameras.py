@@ -76,9 +76,37 @@ def stop_all(cameras: Cameras) -> None:
     cameras.stop_all()
 
 
+@router.post("/stop-monitoring", status_code=status.HTTP_204_NO_CONTENT)
+def stop_monitoring(cameras: Cameras) -> None:
+    """Stops every camera's stream and detections; the tiles stay on the wall and can be resumed."""
+    cameras.pause_all()
+
+
+@router.post("/resume-monitoring", status_code=status.HTTP_204_NO_CONTENT)
+def resume_monitoring(cameras: Cameras) -> None:
+    cameras.resume_all()
+
+
 @router.delete("/violations", status_code=status.HTTP_204_NO_CONTENT)
 def clear_violations(cameras: Cameras) -> None:
     cameras.clear_violations()
+
+
+@router.post("/{camera_id}/stop", status_code=status.HTTP_204_NO_CONTENT)
+def stop_camera(camera_id: str, cameras: Cameras) -> None:
+    """Stops monitoring one camera. Its tile stays on the wall; resume starts it again."""
+    if not cameras.pause(camera_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That camera isn't on the dashboard")
+
+
+@router.post("/{camera_id}/resume", status_code=status.HTTP_204_NO_CONTENT)
+async def resume_camera(camera_id: str, cameras: Cameras) -> None:
+    try:
+        ok = await run_in_threadpool(cameras.resume, camera_id)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    if not ok:
+        raise HTTPException(status.HTTP_409_CONFLICT, "That camera isn't on the dashboard or is still running")
 
 
 @router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)

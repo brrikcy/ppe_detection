@@ -799,7 +799,8 @@ th.is-sorted .det-sort-btn, th.is-sorted .det-sort-icon { color: var(--fg); }
 .cam-modal-actions { display: flex; align-items: center; gap: 10px; }
 .cam-modal-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: 0; }
 .cam-big { min-width: 0; position: relative; display: grid; place-items: center; background: #0c0e0c; min-height: 0; }
-.cam-big-img { max-width: 100%; max-height: calc(100vh - 140px); object-fit: contain; }
+.cam-big-img { width: 100%; aspect-ratio: var(--ar, 16 / 9); max-height: calc(100vh - 140px); object-fit: contain; opacity: 0; }
+.cam-big-img.is-loaded { opacity: 1; }
 .cam-big .cam-badge { position: absolute; top: 12px; left: 12px; }
 .cam-modal-side { display: grid; gap: 12px; align-content: start; padding: 16px; overflow-y: auto; max-height: calc(100vh - 110px); }
 .cam-big-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

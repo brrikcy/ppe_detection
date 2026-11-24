@@ -20,8 +20,30 @@ const PLAY_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="current
 const REMOVE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>`;
 
 // Shows a camera's frames in `img`. Reconnects while `alive()` says the camera is still wanted.
+//
+// Each frame is loaded off-screen first and only put into `img` once it has decoded. Giving the
+// visible <img> a URL straight away, and freeing the previous frame's URL at once, made the browser
+// show its broken-image icon whenever frames arrived faster than they loaded. A frame that arrives
+// while the last one is still loading is skipped, and one that fails to load is dropped, so `img`
+// only ever holds a frame that loaded, and keeps the last good one.
 function playCamera(id, size, img, alive) {
-  let ws = null, timer = null, closed = false;
+  let ws = null, timer = null, closed = false, loading = false;
+  let shown = img.src.startsWith("blob:") ? img.src : null; // a stopped camera's last frame
+  const show = (blob) => {
+    const url = URL.createObjectURL(blob);
+    const probe = new Image();
+    loading = true;
+    probe.onload = () => {
+      loading = false;
+      if (closed || !img.isConnected) { URL.revokeObjectURL(url); return; }
+      const prev = shown;
+      img.src = shown = url;
+      img.classList.add("is-loaded");
+      if (prev) URL.revokeObjectURL(prev);
+    };
+    probe.onerror = () => { loading = false; URL.revokeObjectURL(url); };
+    probe.src = url;
+  };
   const open = () => {
     if (closed) return;
     ws = new WebSocket(api.cameras.live(id, size));
@@ -29,10 +51,7 @@ function playCamera(id, size, img, alive) {
     ws.onmessage = (e) => {
       if (!img.isConnected) return stop();
       ws.send("ok");
-      const prev = img.src;
-      img.src = URL.createObjectURL(e.data);
-      img.classList.add("is-loaded");
-      if (prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+      if (!loading) show(e.data);
     };
     ws.onclose = () => { if (!closed && alive()) timer = setTimeout(open, 2000); };
   };
@@ -355,6 +374,7 @@ export async function renderCameras(view) {
     const cam = data.cameras.find((c) => c.id === id);
     if (!cam) return;
     const img = h("img", { class: "cam-big-img", alt: `${cam.name} live view` });
+    const bigWait = h("div", { class: "cam-wait" }, h("span", { class: "spinner", "aria-hidden": "true" }), h("span", {}, "Connecting…"));
     const stats = h("div", { class: "cam-big-stats" });
     const list = h("ol", { class: "cam-feed" });
     const empty = h("p", { class: "cam-feed-empty" }, "No violations from this camera yet.");
@@ -376,12 +396,14 @@ export async function renderCameras(view) {
             h("button", { type: "button", class: "btn", onclick: () => remove(id) }, "Remove from dashboard"),
             h("button", { type: "button", class: "cam-x", "aria-label": "Close", html: CLOSE_ICON, onclick: close }))),
         h("div", { class: "cam-modal-body" },
-          h("div", { class: "cam-big" }, img, h("span", { class: "cam-badge" }, h("i"), "LIVE")),
+          h("div", { class: "cam-big", style: `--ar:${cam.frame_size ? (cam.frame_size[0] / cam.frame_size[1]).toFixed(4) : "1.7778"}` },
+            img, bigWait, h("span", { class: "cam-badge" }, h("i"), "LIVE")),
           h("aside", { class: "cam-modal-side" }, stats, h("h3", {}, "Violations from this camera"), empty, list))));
     document.body.append(el);
     document.addEventListener("keydown", onKey);
     const stop = playCamera(id, "full", img, () => enlarged?.id === id);
-    enlarged = { id, el, close, stats, list, empty, toggleBtn };
+    enlarged = { id, el, close, stats, list, empty, toggleBtn, img, bigWait };
+    img.addEventListener("load", () => { bigWait.hidden = true; }); // the first frame is in
     drawEnlarged();
   }
 
@@ -391,6 +413,10 @@ export async function renderCameras(view) {
     if (!cam?.active) { enlarged.close(); return; }
     const paused = cam.state === "stopped" || cam.state === "finished";
     enlarged.toggleBtn.textContent = paused ? "Resume monitoring" : "Stop monitoring";
+    const gotFrame = enlarged.img.classList.contains("is-loaded");
+    enlarged.bigWait.hidden = gotFrame;
+    enlarged.bigWait.firstChild.hidden = paused;
+    enlarged.bigWait.lastChild.textContent = paused ? (cam.state === "finished" ? "Finished" : "Stopped") : "Connecting…";
     const s = cam.stats ?? {};
     enlarged.stats.replaceChildren(
       ...[["On screen", s.workers_now ?? 0], ["Missing PPE now", s.violating_now ?? 0],

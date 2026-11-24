@@ -189,7 +189,7 @@ def build_camera_report(state: dict, info: dict, photo: Callable[[dict], Path | 
     """The report as PDF bytes.
 
     `state` is CameraManager.state(); `info` holds what the cameras were started with (required_ppe,
-    analysis_interval_sec, model, settings_state; any may be missing); `photo(event)` gives the path of
+    analysis_interval_sec, settings_state; any may be missing); `photo(event)` gives the path of
     an event's worker photo, or None.
     """
     st = _styles()
@@ -240,8 +240,6 @@ def build_camera_report(state: dict, info: dict, photo: Callable[[dict], Path | 
     rows = [[Paragraph("Required PPE", st["head"]), Paragraph(ppe, st["cell"])],
             [Paragraph("Each worker checked", st["head"]),
              Paragraph(f"every {info['analysis_interval_sec']:g} s" if info.get("analysis_interval_sec") else "-", st["cell"])]]
-    if info.get("model"):
-        rows.append([Paragraph("Vision model", st["head"]), Paragraph(info["model"], st["cell"])])
     if info.get("settings_state"):
         rows.append([Paragraph("Settings state", st["head"]),
                      Paragraph({"1": "State 1 (initial prompt)", "2": "State 2 (current prompt)"}.get(

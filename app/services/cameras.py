@@ -197,7 +197,6 @@ class CameraManager:
         videos = self._videos()
         self.run_info = {"required_ppe": list(options.required_ppe),
                          "analysis_interval_sec": options.analysis_interval_sec,
-                         "model": getattr(options.tuning, "moondream_model", None),
                          "settings_state": getattr(options.tuning, "settings_state", None)}
         started = []
         for cid in ids:

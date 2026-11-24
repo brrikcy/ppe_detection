@@ -12,6 +12,7 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.graphics.shapes import Drawing, Line, PolyLine, Rect, String
 from reportlab.lib.units import mm
 from reportlab.platypus import (
     Image, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
@@ -67,6 +68,120 @@ def _table(rows, widths, st, header=True, zebra=True):
         style += [("BACKGROUND", (0, 0), (-1, 0), SOFT), ("LINEBELOW", (0, 0), (-1, 0), 0.8, INK)]
     t.setStyle(TableStyle(style))
     return t
+
+
+BLUE = colors.HexColor("#2f5f8a")
+PANEL_H = 52 * mm
+
+
+def _clock_label(t: float, bucket: int) -> str:
+    fmt = "%H:%M:%S" if bucket < 60 else "%H:%M"
+    return datetime.fromtimestamp(t).strftime(fmt)
+
+
+def _axes(d: Drawing, x0, y0, w, h, max_v, points, bucket):
+    """Grid lines with values on the left, time labels along the bottom."""
+    for v in (0, max_v / 2, max_v):
+        y = y0 + (v / max_v) * h
+        d.add(Line(x0, y, x0 + w, y, strokeColor=LINE, strokeWidth=0.5))
+        d.add(String(x0 - 4, y - 2.5, f"{v:g}", fontName="Helvetica", fontSize=7, fillColor=MUTED, textAnchor="end"))
+    if points:
+        idx = sorted({0, (len(points) - 1) // 2, len(points) - 1})
+        for i in idx:
+            x = x0 + (w / 2 if len(points) == 1 else i / (len(points) - 1) * w)
+            anchor = "start" if i == 0 and len(idx) > 1 else "end" if i == len(points) - 1 and len(idx) > 1 else "middle"
+            d.add(String(x, y0 - 10, _clock_label(points[i]["t"], bucket), fontName="Helvetica", fontSize=7,
+                         fillColor=MUTED, textAnchor=anchor))
+
+
+def _violations_chart(timeline: dict, width: float) -> Drawing:
+    pts, bucket = timeline["points"], timeline["bucket_sec"]
+    d = Drawing(width, PANEL_H)
+    x0, y0, w, h = 22, 16, width - 30, PANEL_H - 24
+    max_v = max(4, max((p["violations"] for p in pts), default=0))
+    max_v = max_v if max_v <= 8 else -(-max_v // 5) * 5
+    _axes(d, x0, y0, w, h, max_v, pts, bucket)
+    slot = w / max(1, len(pts))
+    bw = max(1.5, min(14.0, slot * 0.7))
+    for i, p in enumerate(pts):
+        if p["violations"]:
+            d.add(Rect(x0 + i * slot + (slot - bw) / 2, y0, bw, p["violations"] / max_v * h, fillColor=RED, strokeColor=None))
+    return d
+
+
+def _workers_chart(timeline: dict, width: float) -> Drawing:
+    pts, bucket = timeline["points"], timeline["bucket_sec"]
+    d = Drawing(width, PANEL_H)
+    x0, y0, w, h = 22, 16, width - 30, PANEL_H - 34  # room above the plot for the legend
+    peak = max((max(p["workers"] or 0, p["missing"] or 0) for p in pts), default=0)
+    max_v = max(4, peak)
+    max_v = max_v if max_v <= 8 else -(-max_v // 5) * 5
+    _axes(d, x0, y0, w, h, max_v, pts, bucket)
+    for key, color in (("workers", BLUE), ("missing", RED)):
+        xy = []
+        for i, p in enumerate(pts):
+            if p[key] is not None:
+                xy += [x0 + (w / 2 if len(pts) == 1 else i / (len(pts) - 1) * w), y0 + p[key] / max_v * h]
+        if len(xy) >= 4:
+            d.add(PolyLine(xy, strokeColor=color, strokeWidth=1.6))
+        elif len(xy) == 2:
+            d.add(Rect(xy[0] - 2, xy[1] - 2, 4, 4, fillColor=color, strokeColor=None))
+    d.add(Rect(x0 + w - 150, PANEL_H - 6, 8, 3, fillColor=BLUE, strokeColor=None))
+    d.add(String(x0 + w - 139, PANEL_H - 8, "Workers on screen", fontName="Helvetica", fontSize=7, fillColor=MUTED))
+    d.add(Rect(x0 + w - 62, PANEL_H - 6, 8, 3, fillColor=RED, strokeColor=None))
+    d.add(String(x0 + w - 51, PANEL_H - 8, "Missing PPE", fontName="Helvetica", fontSize=7, fillColor=MUTED))
+    return d
+
+
+def _hbar_chart(rows: list[tuple[str, float, str]], width: float, color=RED) -> Drawing:
+    """rows: (label, value, text at the end of the bar)."""
+    row_h = 14
+    d = Drawing(width, max(1, len(rows)) * row_h + 2)
+    top = max(1, len(rows)) * row_h
+    peak = max([v for _, v, _ in rows] + [1])
+    label_w, text_w = 70 * mm, 28 * mm
+    track = width - label_w - text_w
+    for i, (label, v, text) in enumerate(rows):
+        y = top - (i + 1) * row_h + 3
+        d.add(String(0, y + 1.5, label[:34], fontName="Helvetica", fontSize=8, fillColor=INK))
+        d.add(Rect(label_w, y, track, 7, fillColor=SOFT, strokeColor=None))
+        d.add(Rect(label_w, y, max(1.5, v / peak * track) if v else 0, 7, fillColor=color, strokeColor=None))
+        d.add(String(label_w + track + 6, y + 1, text, fontName="Helvetica", fontSize=8, fillColor=MUTED))
+    return d
+
+
+def _analytics_story(a: dict, st: dict, width: float) -> list:
+    k = a["kpis"]
+    story = [Paragraph("Analytics", st["h2"])]
+    if not a["timeline"]["points"]:
+        return story + [Paragraph("Not enough data yet: analytics appear once cameras have been running for a moment.", st["cell"])]
+    since = datetime.fromtimestamp(a["since"]).strftime("%d %b %Y, %H:%M:%S")
+    story.append(Paragraph(f"Since {since}, {_clock(a['duration_sec'])} monitored.", st["small"]))
+    story.append(Spacer(1, 4))
+    figs = [("Violations", str(k["violations"]) + (f" ({k['per_hour']} an hour)" if k["per_hour"] is not None else "")),
+            ("Compliance", "-" if k["compliance"] is None else f"{round(k['compliance'] * 100)}% of {k['checks']} checks"),
+            ("Workers tracked", f"{k['workers_tracked']} (up to {k['peak_workers']} on screen at once)"),
+            ("Peak missing PPE", f"{k['peak_missing']} workers at the same time"),
+            ("Most violations", k["worst_camera"] or "none yet")]
+    story.append(_table([[Paragraph(x.upper(), st["head"]), Paragraph(v, st["cell"])] for x, v in figs],
+                        [40 * mm, width - 40 * mm], st, header=False))
+    story.append(Spacer(1, 8))
+    story.append(KeepTogether([Paragraph("Violations over time", st["cellb"]),
+                               _violations_chart(a["timeline"], width)]))
+    story.append(Spacer(1, 6))
+    story.append(KeepTogether([Paragraph("Workers on screen vs missing PPE", st["cellb"]),
+                               _workers_chart(a["timeline"], width)]))
+    story.append(Spacer(1, 6))
+    if a["by_type"]:
+        story.append(KeepTogether([Paragraph("Violations by type", st["cellb"]), Spacer(1, 3),
+                                   _hbar_chart([(t["label"], t["count"], str(t["count"])) for t in a["by_type"]], width)]))
+        story.append(Spacer(1, 6))
+    if a["by_camera"]:
+        rows = [(c["name"], c["violations"],
+                 f"{c['violations']}" + ("" if c["compliance"] is None else f" - {round(c['compliance'] * 100)}% compliant"))
+                for c in a["by_camera"]]
+        story.append(KeepTogether([Paragraph("Violations by camera", st["cellb"]), Spacer(1, 3), _hbar_chart(rows, width)]))
+    return story
 
 
 def build_camera_report(state: dict, info: dict, photo: Callable[[dict], Path | None],
@@ -166,6 +281,9 @@ def build_camera_report(state: dict, info: dict, photo: Callable[[dict], Path | 
                                st["small"]))
     else:
         story.append(Paragraph("No cameras have been started.", st["cell"]))
+
+    if state.get("analytics"):
+        story += _analytics_story(state["analytics"], st, width)
 
     # ---- the violations ----
     story.append(Paragraph("Violation log", st["h2"]))

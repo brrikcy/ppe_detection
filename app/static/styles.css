@@ -820,3 +820,31 @@ th.is-sorted .det-sort-btn, th.is-sorted .det-sort-icon { color: var(--fg); }
 .cam-banner.is-more { background: #7d1714; font-size: 15px; padding: 6px 16px; }
 @keyframes cam-banner-in { from { opacity: 0; transform: translateY(-14px) scale(.96); } }
 @media (prefers-reduced-motion: reduce) { .cam-glow.is-on { animation: none; opacity: .8; } .cam-banner { animation: none; } }
+
+/* camera wall analytics */
+.cam-analytics { display: grid; gap: 14px; }
+.an-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.an-kpi { display: grid; gap: 2px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); }
+.an-kpi b { font: 700 26px/1.1 var(--display); overflow-wrap: anywhere; }
+.an-kpi.is-bad b { color: var(--critical); }
+.an-note { font-size: 12px; color: var(--muted); }
+.an-grid-wrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; }
+.an-panel { display: grid; gap: 6px; align-content: start; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r); }
+.an-chart svg { width: 100%; height: auto; display: block; }
+.an-grid { stroke: var(--line); stroke-width: 1; }
+.an-tick { fill: var(--muted); font: 11px var(--mono); }
+.an-bar { fill: var(--critical); }
+.an-line { fill: none; stroke-width: 2.5; stroke-linejoin: round; }
+.an-workers { stroke: var(--info); color: var(--info); }
+.an-workers-dot { fill: var(--info); }
+.an-missing { stroke: var(--critical); color: var(--critical); }
+.an-missing-dot { fill: var(--critical); }
+.an-legend { display: flex; gap: 16px; font-size: 12px; color: var(--fg-2); }
+.an-key::before { content: ""; display: inline-block; width: 14px; height: 3px; margin-right: 6px; vertical-align: middle; background: currentColor; }
+.an-key { stroke: none; }
+.an-hbars { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.an-hbars li { display: grid; grid-template-columns: minmax(90px, 30%) minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; }
+.an-hl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-htrack { height: 12px; border-radius: 6px; background: var(--surface-2); overflow: hidden; }
+.an-hbar { display: block; height: 100%; border-radius: 6px; background: var(--critical); min-width: 2px; }
+.an-hv { font: 500 12px var(--mono); color: var(--fg-2); }

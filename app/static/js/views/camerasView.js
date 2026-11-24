@@ -5,6 +5,7 @@
 import { api, apiKey } from "../api.js";
 import { openLightbox } from "../lightbox.js";
 import { fmt, h, plural } from "../ui.js";
+import { createAnalytics } from "./cameraAnalytics.js";
 
 const POLL_MS = 1500;
 const ALERT_MS = 5000; // a tile stays red this long after a new violation
@@ -297,6 +298,8 @@ export async function renderCameras(view) {
     }));
   }
 
+  const analytics = createAnalytics();
+
   // ---- enlarged camera ----
   function enlarge(id) {
     if (enlarged) enlarged.close();
@@ -367,6 +370,7 @@ export async function renderCameras(view) {
     drawFilters();
     drawFeed();
     drawEnlarged();
+    analytics.update(data.analytics);
     applyFull();
     if (panelOpen) drawChips();
 
@@ -408,7 +412,8 @@ export async function renderCameras(view) {
       h("section", { class: "cam-main", "aria-label": "Cameras" }, wallEmpty, wall),
       h("section", { class: "card card-pad cam-side", "aria-label": "Violations" },
         h("div", { class: "cam-side-head" }, h("h2", {}, "Violations ", feedCount), clearBtn),
-        filterRow, feedEmpty, feed))));
+        filterRow, feedEmpty, feed),
+      analytics.el)));
 
   setPanel(!data.totals.live);
   draw();

@@ -284,7 +284,7 @@ export async function renderPeoplePlayground(root) {
     const realtime = r.processing_fps ? r.processing_fps / r.fps : null;
     resultCard.replaceChildren(head,
       h("video", { class: "ppg-video", src: api.dev.people.video(t.id), controls: true, preload: "metadata", playsinline: true }),
-      h("p", { class: "hint" }, "Green boxes are people a run would check for PPE; grey ones are too far or too new to be checked; thin amber boxes are kept after a missed detection. The label is the person's ID and detection confidence."),
+      h("p", { class: "hint" }, "Green boxes are people a run would check for PPE; grey ones are too far or too new to be checked; thin amber boxes are kept after a missed detection. The label is the person's ID and detection confidence. With a segmentation model, each person also has a thin outline."),
       h("div", { class: "ppg-stats" },
         stat(r.people, "People found", "different IDs"),
         stat(r.would_be_checked, "Would be checked", "got a PPE check", "good"),

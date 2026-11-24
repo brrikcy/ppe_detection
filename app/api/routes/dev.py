@@ -82,9 +82,11 @@ def _worker_in_run(store: RunStore, runner: RunRunner, run_id: str, name: str):
                 cap.release()
             if not ok:
                 return None
-            others = [o["box"] for o in entry["workers"] if o is not w and not o.get("too_small")]
+            neighbours = [o for o in entry["workers"] if o is not w and not o.get("too_small")]
+            others = [o["box"] for o in neighbours]
             image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            return image, w["box"], others, entry
+            # Outlines (from a segmentation model) let the check hide the other workers as the run did.
+            return image, w["box"], others, entry, w.get("mask"), [o.get("mask") for o in neighbours]
     return None
 
 
@@ -155,17 +157,17 @@ async def try_prompt(
     if image is None and folder == "snapshots":
         found = await run_in_threadpool(_worker_in_run, store, runner, run_id, name)
     if found:
-        img, box, others, entry = found
+        img, box, others, entry, mask, other_masks = found
         note = (f"Checked as in the run: frame {entry['frame']} ({entry['time_sec']} s), the same crop and "
                 f"padding, with {len(others)} other worker{'' if len(others) == 1 else 's'} in the frame.")
     else:
-        img, box, others = _load_image(data), None, ()
+        img, box, others, mask, other_masks = _load_image(data), None, (), None, ()
         note = "Checked on this image alone: the whole image is the worker, with no neighbours."
 
     analyzer = runner.analyzer_factory(Config(api_key=key, required_ppe=[item], tuning=tun,
                                               moondream_endpoint=endpoint_for(key_source, settings)))
     try:
-        result = await run_in_threadpool(analyzer.explain_item, img, item, box, others)
+        result = await run_in_threadpool(analyzer.explain_item, img, item, box, others, mask, other_masks)
     except AuthError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Moondream rejected the API key.")
     except ModelError:
@@ -176,5 +178,10 @@ async def try_prompt(
     finally:
         analyzer.close()
     crop = result.pop("crop")
+    hidden = result.pop("hidden_workers", 0)
+    if hidden:
+        note += f" {hidden} other worker{'' if hidden == 1 else 's'} hidden in the image, as set under Which workers are checked."
+    elif tun.hide_other_workers and found:
+        note += " Nothing was hidden: this run has no worker outlines (it needs a segmentation model) or no neighbour is in the crop."
     return TryRequestResult(**result, image_size=list(crop.size), image=_data_uri(crop),
                             mode="run" if found else "image", note=note)

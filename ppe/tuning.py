@@ -108,6 +108,9 @@ class Tuning(BaseModel):
     confirm_yes_on_overlap: bool = True
     overlap_threshold: float = Field(0.2, ge=0.01, le=1)  # share of the worker's box covered by others
     crop_padding: float = Field(0.05, ge=0, le=0.5)  # around each worker, as a share of the box
+    # Fill the other workers' pixels with grey in a worker's crop, so their PPE can't be credited to this
+    # worker. Needs a segmentation model (-seg weights) as the person detection model: it gives the outlines.
+    hide_other_workers: bool = False
     min_check_height_frac: float = Field(0.08, ge=0, le=0.5)  # smaller workers are "too far"
     min_check_height_px: int = Field(100, ge=0, le=2000)  # ...and so are workers shorter than this
 

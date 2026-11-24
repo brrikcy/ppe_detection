@@ -24,6 +24,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+import cv2
+import numpy as np
 from PIL import Image
 
 from .config import PPE_CATALOG, Config
@@ -44,6 +46,9 @@ class WorkerResult:
     check_failed: bool = False  # every item failed: this check says nothing about the worker
     error: str | None = None  # the first failure's message
     last_status: str | None = None  # too far now: their status from before (video display only)
+    # Outline of the worker (N points, frame pixels) from a segmentation model; kept in the report so
+    # a check can be repeated with the other workers hidden. None with a normal detector.
+    mask: np.ndarray | None = field(default=None, compare=False, repr=False)
 
     @property
     def ok(self) -> bool:
@@ -192,6 +197,45 @@ def overlap_share(box, others) -> float:
     return min(1.0, covered / area)
 
 
+HIDE_FILL = (128, 128, 128)  # what the other workers' pixels become (RGB)
+HIDE_GROW = 0.02  # outlines grow by this share of the worker's height, so edge pixels of a neighbour go too
+
+
+def hide_others(crop: Image.Image, crop_box, own, others) -> tuple[Image.Image, int]:
+    """A copy of `crop` (cut from the frame at `crop_box`) with the other workers' pixels filled with grey.
+
+    `own` and `others` are outlines (N points, frame pixels). This worker's own pixels always stay, so
+    where another worker overlaps them nothing of this worker is lost. Returns the image and how many of
+    the other workers are in the crop.
+    """
+    ox, oy = int(round(crop_box[0])), int(round(crop_box[1]))
+    arr = np.array(crop.convert("RGB"))
+    h, w = arr.shape[:2]
+    shift = np.array([ox, oy], np.float32)
+
+    def polygon(points) -> np.ndarray:
+        return np.round(np.asarray(points, np.float32) - shift).astype(np.int32)
+
+    hide = np.zeros((h, w), np.uint8)
+    hidden = 0
+    for m in others:
+        pts = np.asarray(m, np.float32)
+        if len(pts) < 3 or pts[:, 0].max() < ox or pts[:, 0].min() > ox + w or pts[:, 1].max() < oy or pts[:, 1].min() > oy + h:
+            continue  # not in this crop
+        cv2.fillPoly(hide, [polygon(pts)], 255)
+        hidden += 1
+    if not hidden:
+        return crop, 0
+    own_pts = np.asarray(own, np.float32)
+    keep = np.zeros((h, w), np.uint8)
+    cv2.fillPoly(keep, [polygon(own_pts)], 255)
+    grow = max(1, int(round(HIDE_GROW * (own_pts[:, 1].max() - own_pts[:, 1].min()))))
+    kernel = np.ones((2 * grow + 1, 2 * grow + 1), np.uint8)
+    hide, keep = cv2.dilate(hide, kernel), cv2.dilate(keep, kernel)
+    arr[(hide > 0) & (keep == 0)] = HIDE_FILL
+    return Image.fromarray(arr), hidden
+
+
 class PPEAnalyzer:
     def __init__(self, config: Config, model=None):
         self.config = config
@@ -214,6 +258,18 @@ class PPEAnalyzer:
         px = (x2 - x1) * self.tuning.crop_padding
         py = (y2 - y1) * self.tuning.crop_padding
         return max(0, x1 - px), max(0, y1 - py), min(w, x2 + px), min(h, y2 + py)
+
+    def _crop(self, image: Image.Image, crop_box, mask, other_masks) -> tuple[Image.Image, int]:
+        """The crop sent for a worker, and how many other workers were hidden in it.
+
+        With `hide_other_workers` on, the other workers' pixels are greyed out. That needs this worker's
+        outline and at least one other worker's; without them (a normal detector) the crop is as is.
+        """
+        crop = image.crop(crop_box)
+        others = [m for m in other_masks if m is not None]
+        if not (self.tuning.hide_other_workers and mask is not None and others):
+            return crop, 0
+        return hide_others(crop, crop_box, mask, others)
 
     def _judge_box(self, frame_box, item: str, box, others, region) -> str:
         """Why a detected box (frame pixels) does or doesn't count for this worker: "ok" or a reason."""
@@ -300,21 +356,23 @@ class PPEAnalyzer:
         # "No": the part was seen (or the prompt doesn't ask about it) and the item isn't on it.
         return "missing"
 
-    def explain_item(self, image: Image.Image, item: str, box=None, others=()) -> dict:
+    def explain_item(self, image: Image.Image, item: str, box=None, others=(), mask=None, other_masks=()) -> dict:
         """Check one PPE item and return every step (for tuning).
 
         Without `box`, the whole image is the worker. With `box` (and the other workers'
-        boxes), it is checked exactly as in a run: same crop, padding and neighbours.
+        boxes and outlines), it is checked exactly as in a run: same crop, padding, neighbours
+        and, with `hide_other_workers`, the same hidden workers.
         """
+        hidden = 0
         if box is None:
             box = crop_box = (0, 0, *image.size)
             crop = image
         else:
             crop_box = self._crop_box(image, box)
-            crop = image.crop(crop_box)
+            crop, hidden = self._crop(image, crop_box, mask, other_masks)
         trace: list = []
         status = self._item_status(crop, crop_box, item, tuple(box), [tuple(o) for o in others], trace)
-        return {"item": item, "status": status, "steps": trace, "crop": crop}
+        return {"item": item, "status": status, "steps": trace, "crop": crop, "hidden_workers": hidden}
 
     def _answers_together(self, crop: Image.Image, items: list[str]) -> dict[str, str]:
         """One question for all items; returns the replies it could read (others are asked one by one)."""
@@ -327,12 +385,15 @@ class PPEAnalyzer:
             return {}
         return _parse_multi(reply, items)
 
-    def check_worker(self, image: Image.Image, box, others=()) -> WorkerResult:
-        """`others` are the other workers' boxes in the frame, so their PPE isn't credited to this one."""
+    def check_worker(self, image: Image.Image, box, others=(), mask=None, other_masks=()) -> WorkerResult:
+        """`others` are the other workers' boxes in the frame, so their PPE isn't credited to this one.
+
+        `mask` is this worker's outline and `other_masks` the others'; with `hide_other_workers` the
+        others are hidden in the crop sent to Moondream."""
         if box[3] - box[1] < self.tuning.min_check_height(image.size[1]):
             return WorkerResult(box=box, too_small=True)
         crop_box = self._crop_box(image, box)
-        crop = image.crop(crop_box)
+        crop, _ = self._crop(image, crop_box, mask, other_masks)
         items = list(self.config.required_ppe)
         answers = self._answers_together(crop, items) if self.tuning.one_query_per_worker and len(items) > 1 else {}
         futures = {
@@ -359,17 +420,25 @@ class PPEAnalyzer:
             error=error,
         )
 
-    def check_workers(self, image: Image.Image, boxes, all_boxes=None) -> list[WorkerResult]:
+    def check_workers(self, image: Image.Image, boxes, all_boxes=None, all_masks=None) -> list[WorkerResult]:
         """Check `boxes` in parallel. `all_boxes` (default: `boxes`) are everyone in the frame,
-        so PPE on a neighbour who isn't being checked right now still isn't credited."""
+        so PPE on a neighbour who isn't being checked right now still isn't credited.
+        `all_masks` are their outlines, in the same order (None for a worker without one)."""
         everyone = list(all_boxes if all_boxes is not None else boxes)
+        masks = list(all_masks) if all_masks is not None else [None] * len(everyone)
         if not boxes:
             return []
+
+        def check(b):
+            others = [j for j, o in enumerate(everyone) if o != b]
+            own = next((j for j, o in enumerate(everyone) if o == b), None)
+            return self.check_worker(image, b, [everyone[j] for j in others],
+                                     masks[own] if own is not None else None, [masks[j] for j in others])
+
         # Worker checks submit item queries to the shared pool, so run the
         # per-worker fan-out on a separate pool to avoid deadlock.
         with ThreadPoolExecutor(max_workers=len(boxes)) as outer:
-            return list(outer.map(
-                lambda b: self.check_worker(image, b, [o for o in everyone if o != b]), boxes))
+            return list(outer.map(check, boxes))
 
     def close(self):
         self._pool.shutdown(wait=True)

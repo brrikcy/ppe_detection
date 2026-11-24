@@ -12,6 +12,9 @@ their last box is still drawn, so boxes don't blink when the detector misses a f
 Detection is the slowest step of a run, so people are detected `detect_fps` times a
 second (default 10) rather than on every frame; in between, each box moves on at its
 last measured speed.
+
+With a segmentation model (-seg weights) each person also gets an outline (TrackedPerson.mask).
+It is used to hide the other workers in a worker's crop (Tuning.hide_other_workers).
 """
 
 from __future__ import annotations
@@ -89,6 +92,24 @@ class TrackedPerson:
     box: Box  # smoothed, in frame pixels
     score: float
     coasting: bool = False  # not detected this frame; last known box (drawn, never checked)
+    # Outline of the person: N points (x, y) in frame pixels, from a segmentation model. None with a
+    # normal detector. It moves with the box between detections.
+    mask: np.ndarray | None = field(default=None, compare=False, repr=False)
+
+
+def _shifted(mask: np.ndarray | None, dx: float, dy: float) -> np.ndarray | None:
+    return None if mask is None else mask + np.array([dx, dy], np.float32)
+
+
+def _outline(polygons, row_rest) -> np.ndarray | None:
+    """The outline of the detection a tracked row came from. `row_rest` is the row after its score:
+    [class, detection index]; polygons are the frame's detections' outlines (None: no segmentation)."""
+    if polygons is None or len(row_rest) < 2:
+        return None
+    i = int(row_rest[1])
+    if not 0 <= i < len(polygons) or len(polygons[i]) < 3:
+        return None
+    return np.asarray(polygons[i], np.float32)
 
 
 def tracker_from_tuning(tun, fps: float, default_model: Path | None = None) -> "YoloPersonTracker":
@@ -174,17 +195,20 @@ class YoloPersonTracker:
             b = np.array(p.box, dtype=float) + v * (i - self._seen_at.get(p.id, i))
             x1, y1 = int(np.clip(b[0], 0, w - 1)), int(np.clip(b[1], 0, h - 1))
             x2, y2 = int(np.clip(b[2], x1 + 1, w)), int(np.clip(b[3], y1 + 1, h))
-            out.append(TrackedPerson(id=p.id, box=(x1, y1, x2, y2), score=p.score))
+            out.append(TrackedPerson(id=p.id, box=(x1, y1, x2, y2), score=p.score,
+                                     mask=_shifted(p.mask, x1 - p.box[0], y1 - p.box[1])))
         return sorted(out, key=lambda p: p.box[0])
 
     def _detect(self, frame: np.ndarray, i: int) -> list[TrackedPerson]:
         result = self._model.predict(frame, classes=[PERSON_CLASS], conf=self.conf, imgsz=self.imgsz,
                                      verbose=False)[0]
         rows = self._tracker.update(result.boxes.cpu().numpy(), frame)
+        # Segmentation models give one outline per detection, in the same order as the boxes.
+        polygons = result.masks.xy if getattr(result, "masks", None) is not None else None
         h, w = frame.shape[:2]
         min_age = max(1, int(round(self.min_age_sec * self.fps / self._stride)))  # in detections
         people, seen = [], set()
-        for x1, y1, x2, y2, tid, score, *_ in rows:
+        for x1, y1, x2, y2, tid, score, *rest in rows:
             tid = int(tid)
             seen.add(tid)
             self._age[tid] = self._age.get(tid, 0) + 1
@@ -203,7 +227,8 @@ class YoloPersonTracker:
                 continue
             bx1, by1 = int(np.clip(box[0], 0, w - 1)), int(np.clip(box[1], 0, h - 1))
             bx2, by2 = int(np.clip(box[2], bx1 + 1, w)), int(np.clip(box[3], by1 + 1, h))
-            person = TrackedPerson(id=tid, box=(bx1, by1, bx2, by2), score=float(score))
+            person = TrackedPerson(id=tid, box=(bx1, by1, bx2, by2), score=float(score),
+                                   mask=_outline(polygons, rest))
             people.append(person)
             self._last[tid] = (person, i)
         # Forget smoothing for tracks not seen this frame, so a returning worker snaps to their new box.

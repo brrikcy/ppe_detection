@@ -42,6 +42,10 @@ const CARDS = [
         f("crop_padding", "number", "Crop padding",
           "Extra space around each worker in the image sent to Moondream. More context, but neighbours creep in.",
           { min: 0, max: 0.5, step: 0.01, unit: "× box" }),
+        f("hide_other_workers", "toggle", "Hide other workers in the crop",
+          "Fills the other workers' pixels with grey in the image sent to Moondream, so their PPE can't be credited to this worker. Needs a segmentation model (a -seg.pt file) as the detection model under Person tracking: it gives each worker an outline. With a normal model nothing is hidden.",
+          { warnOnly: true, dependsOn: (d) => (d.hide_other_workers && !/-seg\.(pt|onnx|engine)$/i.test(d.person_model || "")
+            ? "No segmentation model is selected under Person tracking, so nothing is hidden." : null) }),
         f("min_check_height_frac", "number", "Minimum worker height",
           "Shorter workers are shown as “Too far” and not checked (no API calls).",
           { min: 0, max: 0.5, step: 0.01, unit: "× frame" }),

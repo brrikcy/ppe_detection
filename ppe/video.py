@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 import cv2
+import numpy as np
 from PIL import Image
 
 from .analyzer import PPEAnalyzer, WorkerResult
@@ -281,6 +282,7 @@ def process_video(
                     on_check(idx, counts["in_flight"])
             for p, r in zip(due, checked):
                 r.track_id = p.id
+                r.mask = getattr(p, "mask", None)
                 results[p.id] = r
                 counts["worker_checks"] += 1
                 if r.check_failed:
@@ -304,7 +306,7 @@ def process_video(
             if is_check:
                 # Regular check: everyone on screen. Too-far and too-new workers are marked as such.
                 current = [results.get(p.id) or WorkerResult(box=p.box, track_id=p.id, too_small=p.id not in big,
-                                                             pending=p.id in big)
+                                                             pending=p.id in big, mask=getattr(p, "mask", None))
                            for p in live_people]
             else:
                 # Arrival check: only the newcomers, so they're in the report even if they
@@ -359,7 +361,7 @@ def process_video(
             if due:
                 rgb = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 future = checks.submit(analyzer.check_workers, rgb, [p.box for p in due],
-                                       [p.box for p in on_screen])
+                                       [p.box for p in on_screen], [getattr(p, "mask", None) for p in on_screen])
                 attempted.update(p.id for p in due)
                 counts["in_flight"] += len(due)
                 counts["checks_out"] += 1
@@ -421,7 +423,15 @@ def _worker_entry(r: WorkerResult, status: PersonStatus | None) -> dict:
     entry = {"track_id": r.track_id, "box": list(r.box), "label": r.label,
              "violations": r.violations, "unverified": r.unverified, "too_small": r.too_small,
              "pending": r.pending, "failed": r.failed, "check_failed": r.check_failed}
+    if r.mask is not None:
+        entry["mask"] = _simplified(r.mask)
     if status is not None:
         entry.update(confirmed=status.confirmed, shown=list(status.shown),
                      shown_unverified=list(status.unverified))
     return entry
+
+
+def _simplified(mask) -> list[list[int]]:
+    """A worker's outline with fewer points (within 1.5 px), as whole pixels, for the report."""
+    pts = cv2.approxPolyDP(np.asarray(mask, np.float32).reshape(-1, 1, 2), 1.5, True).reshape(-1, 2)
+    return [[int(round(x)), int(round(y))] for x, y in pts]

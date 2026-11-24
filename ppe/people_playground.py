@@ -57,6 +57,8 @@ def draw_people(frame: np.ndarray, people, checkable: set[int]) -> np.ndarray:
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1 if coasting else line_w)
         if coasting:
             continue
+        if getattr(p, "mask", None) is not None:  # segmentation model: the outline used to hide neighbours
+            cv2.polylines(frame, [np.round(p.mask).astype(np.int32)], True, color, 1, cv2.LINE_AA)
         text = f"#{p.id} {p.score:.2f}"
         (tw, th), base = cv2.getTextSize(text, FONT, scale * 0.8, thickness)
         tx = min(max(0, x1), max(0, w - tw - 8))

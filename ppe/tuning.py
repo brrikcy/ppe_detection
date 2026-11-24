@@ -175,6 +175,11 @@ class Tuning(BaseModel):
     parallel_requests: int = Field(4, ge=1, le=16)
     retry_attempts: int = Field(6, ge=1, le=8)  # per call; waits 1, 2, 4 ... s between tries
 
+    # --- Live cameras (the camera wall) ---------------------------------------------
+    # How many times each simulated camera plays its video before it stops by itself; 0 = on repeat
+    # until it is stopped or removed.
+    camera_loops: int = Field(0, ge=0, le=10000)
+
     # --- Person tracking (YOLO + BoT-SORT) -----------------------------------------
     person_model: str = Field("", max_length=120)  # file in models/; "" = server default
     detector_imgsz: int = Field(640, ge=320, le=1920)

@@ -6,7 +6,9 @@ When the video ends it starts again, so the "stream" never ends. Nothing is reco
 straight to the live feeds (JPEG over WebSocket), and each loop's violation incidents are kept
 with a photo, so they show up in the dashboard's violation list as they are found.
 
-A camera is "on the dashboard" from start() until stop(); its violations stay in the list.
+A camera is "on the dashboard" from start() until stop(); its violations stay in the list. It can also
+be paused (stop monitoring: the tile stays, the stream and detections stop) and resumed, and it stops
+by itself after `camera_loops` plays of its video when that developer setting is above 0.
 """
 
 from __future__ import annotations
@@ -70,7 +72,9 @@ class Session:
     duration_sec: float
     stop: threading.Event = field(default_factory=threading.Event)
     thread: threading.Thread | None = None
-    state: str = "starting"  # starting, live, retrying
+    state: str = "starting"  # starting, live, retrying, stopped (paused by the user), finished (all loops played)
+    options: "StartOptions | None" = None
+    run_loops: int = 0  # loops played since it was started or resumed
     error: str | None = None
     loop: int = 0
     started_at: float = field(default_factory=time.time)
@@ -157,13 +161,16 @@ class CameraManager:
                 if s is not None:
                     cam.update(state=s.state, error=s.error, loop=s.loop, checking=s.checking,
                                frame_size=s.frame_size, uptime_sec=round(time.time() - s.started_at),
-                               stats=s.stats)
+                               stats=s.stats, run_loops=s.run_loops,
+                               max_loops=getattr(s.options.tuning, "camera_loops", 0) if s.options else 0)
                 cameras.append(cam)
             events = self._events()
-        live = [c for c in cameras if c["active"]]
+        on_wall = [c for c in cameras if c["active"]]
+        live = [c for c in on_wall if c["state"] not in ("stopped", "finished")]  # still being monitored
         return {
             "cameras": cameras,
             "totals": {
+                "on_wall": len(on_wall),
                 "live": len(live),
                 "workers_now": sum(c["stats"].get("workers_now", 0) for c in live if c.get("stats")),
                 "violating_now": sum(c["stats"].get("violating_now", 0) for c in live if c.get("stats")),
@@ -201,7 +208,7 @@ class CameraManager:
                 if cid in self._active:
                     continue
                 s = Session(id=cid, name=camera_name(cid), path=videos[cid],
-                            duration_sec=self._duration(videos[cid]))
+                            duration_sec=self._duration(videos[cid]), options=options)
                 self._active[cid] = s
             delay = len(started) * START_STAGGER_SEC
             s.thread = threading.Thread(target=self._run, args=(s, options, delay), name=f"camera-{cid}",
@@ -224,6 +231,54 @@ class CameraManager:
     def stop_all(self) -> None:
         for cid in list(self._active):
             self.stop(cid)
+
+    def pause(self, cid: str) -> bool:
+        """Stops monitoring a camera: its stream and detections stop, the tile stays on the wall and
+        it can be resumed. False if it isn't on the wall."""
+        with self._lock:
+            s = self._active.get(cid)
+            if s is None:
+                return False
+            if s.state in ("stopped", "finished"):
+                return True
+            s.stop.set()
+            s.state, s.checking = "stopped", 0
+        for feed in s.feeds.values():
+            feed.close()
+        return True
+
+    def pause_all(self) -> None:
+        for cid in list(self._active):
+            self.pause(cid)
+
+    def resume(self, cid: str) -> bool:
+        """Starts monitoring a paused or finished camera again (its loops count from zero). False if
+        it isn't on the wall or is still running."""
+        with self._lock:
+            s = self._active.get(cid)
+            if s is None or s.options is None:
+                return False
+            old = s.thread
+        if old is not None and old.is_alive():
+            if s.state not in ("stopped", "finished"):
+                return False
+            old.join(timeout=15)  # a paused camera is still wrapping up its loop
+            if old.is_alive():
+                raise RuntimeError("The camera is still stopping; try again in a moment")
+        with self._lock:
+            if self._active.get(cid) is not s or s.state not in ("stopped", "finished", "retrying"):
+                return False
+            s.stop = threading.Event()
+            s.state, s.error, s.run_loops = "starting", None, 0
+            for feed in s.feeds.values():
+                feed.reopen()
+            s.thread = threading.Thread(target=self._run, args=(s, s.options, 0.0), name=f"camera-{cid}", daemon=True)
+            s.thread.start()
+        return True
+
+    def resume_all(self) -> None:
+        for cid in list(self._active):
+            self.resume(cid)
 
     def shutdown(self) -> None:
         threads = []
@@ -313,11 +368,18 @@ class CameraManager:
                         person_model=str(self.person_model) if self.person_model else None,
                         tuning=tun, moondream_endpoint=opt.endpoint)
         analyzer = self.analyzer_factory(config)
+        stop_event = s.stop  # a resume gives the session a new one; only the run that owns it sets the state
+        max_loops = getattr(opt.tuning, "camera_loops", 0)  # 0 = until stopped
+        finished = False
         try:
-            while not s.stop.is_set():
+            while not stop_event.is_set():
+                if max_loops and s.run_loops >= max_loops:
+                    finished = True
+                    break
                 s.loop += 1
                 try:
                     self._play_loop(s, analyzer)
+                    s.run_loops += 1
                     s.error = None
                 except Stopped:
                     break
@@ -334,8 +396,12 @@ class CameraManager:
         finally:
             analyzer.close()
             with self._lock:
-                if self._active.get(s.id) is s:
-                    s.state = "retrying" if s.error else "stopped"
+                if self._active.get(s.id) is s and s.stop is stop_event:
+                    s.state = "retrying" if s.error else "finished" if finished else "stopped"
+                    s.checking = 0
+            if finished:
+                for feed in s.feeds.values():
+                    feed.close()  # the viewers' streams end
 
     def _play_loop(self, s: Session, analyzer: PPEAnalyzer) -> None:
         with self._lock:
@@ -365,7 +431,7 @@ class CameraManager:
 
         def on_frame(idx: int, annotated) -> None:
             s.frames_in_loop = idx
-            if s.state != "live":
+            if s.state != "live" and not s.stop.is_set():
                 s.state = "live"
             for feed in s.feeds.values():
                 if feed.viewers:

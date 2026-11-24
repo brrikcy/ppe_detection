@@ -9,11 +9,14 @@ import { createAnalytics } from "./cameraAnalytics.js";
 
 const POLL_MS = 1500;
 const ALERT_MS = 5000; // a tile stays red this long after a new violation
-const BANNER_MS = 7000; // a violation alert stays on screen this long
+const BANNER_MS = 7000; // a violation banner stays on screen this long
+const GLOW_MS = 1600; // the red glow blinks once, this long
 const MAX_BANNERS = 3; // alerts shown at once; the rest are counted
 const CLOSE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
 const DOWNLOAD_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12m0 0-4-4m4 4 4-4"/><path d="M4 18v1a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1"/></svg>`;
 const EXPAND_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>`;
+const STOP_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`;
+const PLAY_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.9l10.5-6.5a1 1 0 0 0 0-1.8L9.5 4.6A1 1 0 0 0 8 5.5z"/></svg>`;
 const REMOVE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>`;
 
 // Shows a camera's frames in `img`. Reconnects while `alive()` says the camera is still wanted.
@@ -68,7 +71,7 @@ export async function renderCameras(view) {
     void glow.offsetWidth; // restart the animation for a new alert
     glow.classList.add("is-on");
     clearTimeout(glow.timer);
-    glow.timer = setTimeout(() => glow.classList.remove("is-on"), BANNER_MS);
+    glow.timer = setTimeout(() => glow.classList.remove("is-on"), GLOW_MS); // one blink, then it is gone
     const shown = events.slice(0, MAX_BANNERS);
     for (const e of shown) {
       const banner = h("div", { class: "cam-banner" },
@@ -99,16 +102,16 @@ export async function renderCameras(view) {
   let menuOpen = false;
   const menuBtn = h("button", { type: "button", class: "btn", onclick: () => { menuOpen = !menuOpen; applyFull(); } }, "Menu");
   function applyFull() {
-    const full = data.totals.live > 0 && !menuOpen;
+    const full = data.totals.on_wall > 0 && !menuOpen;
     shell?.classList.toggle("cam-full", full);
-    menuBtn.hidden = data.totals.live === 0;
+    menuBtn.hidden = data.totals.on_wall === 0;
     menuBtn.textContent = menuOpen ? "Hide menu" : "Menu";
   }
 
   const reportBtn = h("a", { class: "btn", href: api.cameras.reportUrl, download: "", title: "Download a PDF report of the detections so far" },
     h("span", { html: DOWNLOAD_ICON }), "Download report");
   const addBtn = h("button", { type: "button", class: "btn btn-primary", onclick: () => setPanel(!panelOpen) }, "Add cameras");
-  const stopAllBtn = h("button", { type: "button", class: "btn", onclick: stopAll }, "Remove all");
+  const monitorBtn = h("button", { type: "button", class: "btn", onclick: toggleMonitoring }, "Stop monitoring");
 
   // ---- add-cameras panel ----
   const panelError = h("div", { class: "alert", role: "alert", hidden: true });
@@ -177,9 +180,23 @@ export async function renderCameras(view) {
     panelError.replaceChildren(h("p", {}, msg));
   }
 
-  async function stopAll() {
-    if (!data.totals.live || !confirm("Remove every camera from the wall? Violations found so far stay in the list.")) return;
-    await api.cameras.stopAll();
+  // Stops (or resumes) every camera. The tiles stay on the wall and the violations stay in the list.
+  async function toggleMonitoring() {
+    monitorBtn.disabled = true;
+    try {
+      if (data.totals.live) await api.cameras.stopMonitoring(); else await api.cameras.resumeMonitoring();
+    } catch { /* the next poll shows how it went */ }
+    monitorBtn.disabled = false;
+    await poll();
+  }
+
+  async function toggleCamera(id) {
+    const cam = data.cameras.find((c) => c.id === id);
+    if (!cam?.active) return;
+    const paused = cam.state === "stopped" || cam.state === "finished";
+    try {
+      if (paused) await api.cameras.resume(id); else await api.cameras.stop(id);
+    } catch { /* the next poll shows how it went */ }
     await poll();
   }
 
@@ -207,20 +224,30 @@ export async function renderCameras(view) {
       onclick: (e) => { e.stopPropagation(); enlarge(c.id); } });
     const rm = h("button", { type: "button", class: "cam-btn", title: "Remove from dashboard", "aria-label": `Remove ${c.name} from the dashboard`,
       html: REMOVE_ICON, onclick: (e) => { e.stopPropagation(); remove(c.id); } });
+    const stopBtn = h("button", { type: "button", class: "cam-stop", onclick: (e) => { e.stopPropagation(); toggleCamera(c.id); } });
     const el = h("article", { class: "cam-tile", tabindex: "0", "aria-label": c.name,
-      onclick: () => enlarge(c.id), onkeydown: (e) => { if (e.key === "Enter") enlarge(c.id); } },
+      onclick: () => enlarge(c.id), onkeydown: (e) => { if (e.key === "Enter" && e.target === el) enlarge(c.id); } },
       h("div", { class: "cam-frame" }, img, wait,
         h("div", { class: "cam-top" }, h("b", { class: "cam-name" }, c.name), badge, h("span", { class: "cam-tools" }, expand, rm))),
-      h("div", { class: "cam-foot" }, info, alert, loop));
-    const tile = { id: c.id, el, img, wait, badge, info, alert, loop, alertTimer: null };
-    tile.stop = playCamera(c.id, "thumb", img, () => tiles.get(c.id) === tile);
+      h("div", { class: "cam-foot" }, info, alert, loop, stopBtn));
+    const tile = { id: c.id, el, img, wait, badge, info, alert, loop, stopBtn, alertTimer: null, halt: null, paused: false };
+    startStream(tile);
     return tile;
+  }
+
+  // A tile shows its camera's stream while the camera is monitored; a stopped camera keeps its last frame.
+  function startStream(t) {
+    if (!t.halt) t.halt = playCamera(t.id, "thumb", t.img, () => tiles.get(t.id) === t && !t.paused);
+  }
+  function stopStream(t) {
+    t.halt?.();
+    t.halt = null;
   }
 
   function drawWall() {
     const active = data.cameras.filter((c) => c.active);
     for (const [id, t] of tiles) {
-      if (!active.some((c) => c.id === id)) { t.stop(); clearTimeout(t.alertTimer); t.el.remove(); tiles.delete(id); }
+      if (!active.some((c) => c.id === id)) { stopStream(t); clearTimeout(t.alertTimer); t.el.remove(); tiles.delete(id); }
     }
     for (const c of active) {
       let t = tiles.get(c.id);
@@ -232,23 +259,36 @@ export async function renderCameras(view) {
     for (const c of active) wall.append(tiles.get(c.id).el);
     wallEmpty.hidden = active.length > 0;
     wall.hidden = active.length === 0;
-    stopAllBtn.hidden = active.length === 0;
+    monitorBtn.hidden = active.length === 0;
+    monitorBtn.textContent = data.totals.live || !active.length ? "Stop monitoring" : "Resume monitoring";
   }
 
   function updateTile(t, c) {
     const s = c.stats ?? {};
     const retrying = c.state === "retrying";
-    t.wait.hidden = c.state === "live" && t.img.classList.contains("is-loaded");
-    t.wait.lastChild.textContent = retrying ? (c.error ?? "Reconnecting…") : "Connecting…";
+    const paused = c.state === "stopped" || c.state === "finished";
+    const loaded = t.img.classList.contains("is-loaded");
+    t.paused = paused;
+    if (paused) stopStream(t); else startStream(t);
+    t.el.classList.toggle("is-paused", paused);
+    t.wait.hidden = paused ? loaded : c.state === "live" && loaded;
+    t.wait.firstChild.hidden = paused;
+    t.wait.lastChild.textContent = paused ? (c.state === "finished" ? "Finished" : "Stopped")
+      : retrying ? (c.error ?? "Reconnecting…") : "Connecting…";
     t.wait.classList.toggle("is-error", retrying);
     t.badge.classList.toggle("is-off", c.state !== "live");
-    t.badge.lastChild.textContent = c.state === "live" ? "LIVE" : retrying ? "OFFLINE" : "STARTING";
-    t.loop.textContent = c.loop ? `Loop ${c.loop}` : "";
+    t.badge.lastChild.textContent = c.state === "live" ? "LIVE" : retrying ? "OFFLINE" : paused
+      ? (c.state === "finished" ? "FINISHED" : "STOPPED") : "STARTING";
+    t.loop.textContent = loopText(c);
     const workers = s.workers_now ?? 0, bad = s.violating_now ?? 0;
-    t.info.textContent = c.state !== "live" ? "" : c.checking ? `Checking ${plural(c.checking, "worker")}…`
-      : workers ? `${plural(workers, "worker")} on screen` : "No one on screen";
-    t.alert.textContent = bad ? `${bad} missing PPE` : "";
-    t.el.classList.toggle("has-bad", bad > 0);
+    t.info.textContent = paused ? (c.state === "finished" ? "All loops played" : "Monitoring stopped")
+      : c.state !== "live" ? "" : c.checking ? `Checking ${plural(c.checking, "worker")}…`
+        : workers ? `${plural(workers, "worker")} on screen` : "No one on screen";
+    t.alert.textContent = !paused && bad ? `${bad} missing PPE` : "";
+    t.el.classList.toggle("has-bad", !paused && bad > 0);
+    t.stopBtn.innerHTML = paused ? `${PLAY_ICON}<span>Resume</span>` : `${STOP_ICON}<span>Stop</span>`;
+    t.stopBtn.title = paused ? "Start monitoring this camera again" : "Stop monitoring this camera";
+    t.stopBtn.classList.toggle("is-resume", paused);
   }
 
   // ---- violations ----
@@ -262,6 +302,15 @@ export async function renderCameras(view) {
     seen.clear();
     await poll();
   } }, "Clear");
+
+  // "Loop 2" on repeat; "Loop 2 of 3" when the camera stops by itself after a set number of loops.
+  function loopText(c) {
+    if (!c.loop) return "";
+    if (!c.max_loops) return `Loop ${c.loop}`;
+    if (c.state === "finished") return `${plural(c.max_loops, "loop")} played`;
+    if (c.state === "stopped") return `${c.run_loops} of ${c.max_loops} loops`;
+    return `Loop ${Math.min(c.run_loops + 1, c.max_loops)} of ${c.max_loops}`;
+  }
 
   function visibleEvents() {
     return filter ? data.violations.filter((e) => e.camera_id === filter) : data.violations;
@@ -283,7 +332,7 @@ export async function renderCameras(view) {
     feedCount.hidden = !events.length;
     feedCount.textContent = String(events.length);
     feedEmpty.hidden = events.length > 0;
-    feedEmpty.textContent = data.totals.live
+    feedEmpty.textContent = data.totals.on_wall
       ? "No violations yet. They appear here the moment a worker is seen without the required PPE."
       : "Start a camera to begin watching for violations.";
     feed.replaceChildren(...events.map((e, i) => {
@@ -309,6 +358,7 @@ export async function renderCameras(view) {
     const stats = h("div", { class: "cam-big-stats" });
     const list = h("ol", { class: "cam-feed" });
     const empty = h("p", { class: "cam-feed-empty" }, "No violations from this camera yet.");
+    const toggleBtn = h("button", { type: "button", class: "btn", onclick: () => toggleCamera(id) });
     const onKey = (e) => { if (e.key === "Escape" && !document.querySelector(".lightbox")) close(); };
     const close = () => {
       stop();
@@ -322,6 +372,7 @@ export async function renderCameras(view) {
         h("header", { class: "cam-modal-head" },
           h("div", {}, h("span", { class: "eyebrow" }, "RTSP simulation · looping"), h("h2", {}, cam.name)),
           h("div", { class: "cam-modal-actions" },
+            toggleBtn,
             h("button", { type: "button", class: "btn", onclick: () => remove(id) }, "Remove from dashboard"),
             h("button", { type: "button", class: "cam-x", "aria-label": "Close", html: CLOSE_ICON, onclick: close }))),
         h("div", { class: "cam-modal-body" },
@@ -330,7 +381,7 @@ export async function renderCameras(view) {
     document.body.append(el);
     document.addEventListener("keydown", onKey);
     const stop = playCamera(id, "full", img, () => enlarged?.id === id);
-    enlarged = { id, el, close, stats, list, empty };
+    enlarged = { id, el, close, stats, list, empty, toggleBtn };
     drawEnlarged();
   }
 
@@ -338,6 +389,8 @@ export async function renderCameras(view) {
     if (!enlarged) return;
     const cam = data.cameras.find((c) => c.id === enlarged.id);
     if (!cam?.active) { enlarged.close(); return; }
+    const paused = cam.state === "stopped" || cam.state === "finished";
+    enlarged.toggleBtn.textContent = paused ? "Resume monitoring" : "Stop monitoring";
     const s = cam.stats ?? {};
     enlarged.stats.replaceChildren(
       ...[["On screen", s.workers_now ?? 0], ["Missing PPE now", s.violating_now ?? 0],
@@ -405,7 +458,7 @@ export async function renderCameras(view) {
     h("header", { class: "cam-head" },
       h("div", {}, h("span", { class: "eyebrow" }, "Site monitoring"), h("h1", {}, "Live camera wall"),
         h("p", { class: "hint" }, "Simulated RTSP cameras, each looping its video. Workers are tracked and PPE is checked live.")),
-      h("div", { class: "cam-head-actions" }, menuBtn, stopAllBtn, reportBtn, addBtn)),
+      h("div", { class: "cam-head-actions" }, menuBtn, monitorBtn, reportBtn, addBtn)),
     h("div", { class: "cam-stats" }, sLive.el, sWorkers.el, sNow.el, sTotal.el),
     panel,
     h("div", { class: "cam-layout" },
@@ -415,7 +468,7 @@ export async function renderCameras(view) {
         filterRow, feedEmpty, feed),
       analytics.el)));
 
-  setPanel(!data.totals.live);
+  setPanel(!data.totals.on_wall);
   draw();
   timer = setTimeout(poll, POLL_MS);
 
@@ -427,7 +480,7 @@ export async function renderCameras(view) {
     glow.remove();
     banners.remove();
     enlarged?.close();
-    for (const t of tiles.values()) { t.stop(); clearTimeout(t.alertTimer); }
+    for (const t of tiles.values()) { stopStream(t); clearTimeout(t.alertTimer); }
     tiles.clear();
   };
 }

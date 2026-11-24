@@ -113,3 +113,38 @@ def test_pdf_report_lists_cameras_and_violations(client):
     _wait(lambda: client.get("/api/cameras").json()["violations"])
     r = client.get("/api/cameras/report")
     assert r.status_code == 200 and r.content.startswith(b"%PDF") and len(r.content) > 3000
+
+
+def test_analytics_numbers():
+    from collections import Counter
+
+    from app.services.cameras import compute_analytics
+
+    log = [{"ts": 1000, "camera_id": "a", "violations": ["No Helmet"]},
+           {"ts": 1010, "camera_id": "a", "violations": ["No Helmet", "No Vest"]},
+           {"ts": 1100, "camera_id": "b", "violations": ["No Vest"]}]
+    samples = [(1000, "a", 2, 1), (1005, "b", 1, 0), (1100, "a", 3, 2), (1100, "b", 1, 1)]
+    counts = {"a": Counter(ok=6, violation=2, people=4), "b": Counter(ok=2, violation=0, people=1)}
+    a = compute_analytics(log, samples, counts, {"a": "Cam A", "b": "Cam B"})
+    assert a["kpis"]["violations"] == 3 and a["kpis"]["checks"] == 10
+    assert a["kpis"]["compliance"] == 0.8 and a["kpis"]["workers_tracked"] == 5
+    assert a["kpis"]["worst_camera"] == "Cam A" and a["kpis"]["peak_missing"] == 3
+    assert [(t["label"], t["count"]) for t in a["by_type"]] == [("No Helmet", 2), ("No Vest", 2)] or \
+        {(t["label"], t["count"]) for t in a["by_type"]} == {("No Helmet", 2), ("No Vest", 2)}
+    cam_a = next(c for c in a["by_camera"] if c["id"] == "a")
+    assert cam_a["violations"] == 2 and cam_a["compliance"] == 0.75
+    pts = a["timeline"]["points"]
+    assert sum(p["violations"] for p in pts) == 3
+    assert a["timeline"]["bucket_sec"] == 15 and pts[-1]["workers"] == 4 and pts[-1]["missing"] == 3
+    empty = compute_analytics([], [], {}, {})
+    assert empty["kpis"]["violations"] == 0 and empty["kpis"]["compliance"] is None and empty["timeline"]["points"] == []
+
+
+def test_state_includes_analytics_and_clear_resets_them(client):
+    client.post("/api/cameras/start", json={"camera_ids": ["left_corner_2"], "analysis_interval_sec": 0.5})
+    a = _wait(lambda: (lambda x: x if x["kpis"]["violations"] else None)(client.get("/api/cameras").json()["analytics"]))
+    assert a["by_camera"][0]["id"] == "left_corner_2" and a["by_type"]
+    assert a["timeline"]["points"] and a["kpis"]["checks"] >= 0
+    client.delete("/api/cameras/left_corner_2")
+    client.delete("/api/cameras/violations")
+    assert client.get("/api/cameras").json()["analytics"]["kpis"]["violations"] == 0

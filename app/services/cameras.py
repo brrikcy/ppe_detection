@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter, deque
 import shutil
 import threading
 import time
@@ -45,6 +46,9 @@ MAX_EVENTS_PER_CAMERA = 150  # violations kept per camera; older ones are droppe
 THUMB = {"max_width": 480, "quality": 55, "fps": 8}  # tiles on the wall
 FULL = {"max_width": 1280, "quality": 70, "fps": 25}  # one camera enlarged
 SNAPSHOT_MAX_HEIGHT = 320
+SAMPLES_KEPT = 20000
+MAX_TIMELINE_BUCKETS = 40
+BUCKET_SECONDS = (15, 30, 60, 120, 300, 600, 900, 1800, 3600)
 
 
 def camera_id(path: Path) -> str:
@@ -73,6 +77,7 @@ class Session:
     frame_size: list[int] | None = None
     checking: int = 0
     stats: dict = field(default_factory=dict)
+    loop_counts: dict = field(default_factory=dict)  # checks of the loop in progress, for the analytics
     events: list[dict] = field(default_factory=list)  # incidents of the loop in progress
     frames_in_loop: int = 0
     feeds: dict[str, LiveFeed] = field(default_factory=dict)
@@ -103,6 +108,11 @@ class CameraManager:
         self._lock = threading.RLock()
         self._active: dict[str, Session] = {}
         self._history: dict[str, list[dict]] = {}  # finished loops' incidents, per camera
+        # Analytics: every violation seen (by event id), the checks of finished loops, and one sample per
+        # regular check (time, camera, workers on screen, workers missing PPE).
+        self._log: dict[str, dict] = {}
+        self._counts: dict[str, Counter] = {}
+        self._samples: deque = deque(maxlen=SAMPLES_KEPT)
         self.run_info: dict = {}  # what the cameras were last started with, for the report
         self._probe_cache: dict[tuple[str, float], tuple[float, float]] = {}  # (duration s, source fps)
         self._seq = 0
@@ -160,7 +170,19 @@ class CameraManager:
                 "violations": len(events),
             },
             "violations": events[:300],
+            "analytics": self.analytics(),
         }
+
+    def analytics(self) -> dict:
+        """Numbers and series for the dashboard's analytics and the report, over everything since the
+        cameras were started (or the violation list was last cleared)."""
+        with self._lock:
+            log, samples = list(self._log.values()), list(self._samples)
+            counts = {cid: Counter(c) for cid, c in self._counts.items()}
+            for cid, s in self._active.items():
+                counts.setdefault(cid, Counter()).update(s.loop_counts)
+            names = {cid: camera_name(cid) for cid in self._videos()}
+        return compute_analytics(log, samples, counts, names)
 
     # -- starting and stopping --------------------------------------------------------
     def start(self, ids: list[str], options: StartOptions) -> list[str]:
@@ -219,6 +241,12 @@ class CameraManager:
             for s in self._active.values():
                 self._drop_files(s.events)
                 s.events = []
+            # The analytics start over with the list.
+            self._log.clear()
+            self._counts.clear()
+            self._samples.clear()
+            for s in self._active.values():
+                s.loop_counts = {}
 
     def photo_of(self, event: dict) -> Path | None:
         """The worker photo of a violation (for the report)."""
@@ -256,6 +284,8 @@ class CameraManager:
         """Keeps the loop's incidents with their photos; the rest of the loop's images go."""
         with self._lock:
             s.events = []
+            self._counts.setdefault(s.id, Counter()).update(s.loop_counts)
+            s.loop_counts = {}  # counted now: the next loop starts from zero
             history = self._history.setdefault(s.id, [])
             history.extend(events)
             if len(history) > MAX_EVENTS_PER_CAMERA:
@@ -326,6 +356,8 @@ class CameraManager:
             summary = build_summary(timeline, names("snapshots"), names("frames"), set(),
                                     tun.vote_window, tun.confirm_checks)
             s.stats = _stats(summary)
+            s.loop_counts = {"ok": summary.ok_checks, "violation": summary.violation_checks,
+                             "people": len(summary.people)}
             return [_event(s, token, e) for e in summary.events]
 
         def on_start(w: int, h: int) -> None:
@@ -355,6 +387,12 @@ class CameraManager:
             with self._lock:
                 if self._active.get(s.id) is s:
                     s.events = events
+                for e in events:  # items can be added to an incident while it goes on
+                    self._log[e["id"]] = {"ts": datetime.fromisoformat(e["detected_at"]).timestamp(),
+                                          "camera_id": e["camera_id"], "violations": list(e["violations"])}
+                if not entry.get("arrival"):
+                    self._samples.append((time.time(), s.id, s.stats.get("workers_now", 0),
+                                          s.stats.get("violating_now", 0)))
 
         try:
             process_video(s.path, pdir / "unused.mp4", analyzer, on_analysed=on_analysed, on_frame=on_frame,
@@ -382,6 +420,62 @@ def _save_violation_crops(folder: Path, frame_idx: int, frame, results: list[Wor
         if ch > SNAPSHOT_MAX_HEIGHT:
             crop = cv2.resize(crop, (max(1, int(cw * SNAPSHOT_MAX_HEIGHT / ch)), SNAPSHOT_MAX_HEIGHT))
         cv2.imwrite(str(folder / snapshot_name(frame_idx, i)), crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+
+def _bucket_seconds(span: float) -> int:
+    """The smallest bucket that keeps the timeline within MAX_TIMELINE_BUCKETS."""
+    return next((b for b in BUCKET_SECONDS if span / b <= MAX_TIMELINE_BUCKETS), BUCKET_SECONDS[-1])
+
+
+def compute_analytics(log: list[dict], samples: list[tuple], counts: dict[str, Counter],
+                      names: dict[str, str]) -> dict:
+    """Analytics from the violation log ({ts, camera_id, violations}), the per-check samples
+    ((time, camera, workers, missing)) and the checks counted per camera ({ok, violation, people})."""
+    by_type = Counter(v for e in log for v in e["violations"])
+    per_camera_violations = Counter(e["camera_id"] for e in log)
+    by_camera = []
+    for cid in sorted(set(per_camera_violations) | set(counts) | {s[1] for s in samples}):
+        c = counts.get(cid, Counter())
+        judged = c["ok"] + c["violation"]
+        by_camera.append({"id": cid, "name": names.get(cid, camera_name(cid)),
+                          "violations": per_camera_violations.get(cid, 0), "checks": judged,
+                          "workers": c["people"], "compliance": c["ok"] / judged if judged else None})
+    judged = sum(c["checks"] for c in by_camera)
+    ok = sum(c["checks"] * c["compliance"] for c in by_camera if c["compliance"] is not None)
+
+    times = [e["ts"] for e in log] + [s[0] for s in samples]
+    t0, t1 = (min(times), max(times)) if times else (time.time(), time.time())
+    bucket = _bucket_seconds(t1 - t0)
+    n = int((t1 - t0) // bucket) + 1
+    points = [{"t": t0 + i * bucket, "violations": 0, "workers": None, "missing": None} for i in range(n)]
+    for e in log:
+        points[min(n - 1, int((e["ts"] - t0) // bucket))]["violations"] += 1
+    latest: dict[int, dict[str, tuple[int, int]]] = {}  # bucket -> camera -> last (workers, missing)
+    for ts, cid, workers, missing in samples:
+        latest.setdefault(min(n - 1, int((ts - t0) // bucket)), {})[cid] = (workers, missing)
+    for i, cams in latest.items():
+        points[i]["workers"] = sum(w for w, _ in cams.values())
+        points[i]["missing"] = sum(m for _, m in cams.values())
+
+    duration = t1 - t0
+    worst = max(by_camera, key=lambda c: c["violations"], default=None)
+    return {
+        "since": t0 if times else None,
+        "duration_sec": round(duration),
+        "kpis": {
+            "violations": len(log),
+            "per_hour": round(len(log) / (duration / 3600), 1) if duration >= 60 else None,
+            "compliance": ok / judged if judged else None,
+            "checks": judged,
+            "workers_tracked": sum(c["workers"] for c in by_camera),
+            "peak_missing": max((p["missing"] or 0 for p in points), default=0),
+            "peak_workers": max((p["workers"] or 0 for p in points), default=0),
+            "worst_camera": worst["name"] if worst and worst["violations"] else None,
+        },
+        "by_type": [{"label": k, "count": v} for k, v in by_type.most_common()],
+        "by_camera": sorted(by_camera, key=lambda c: (-c["violations"], c["name"])),
+        "timeline": {"bucket_sec": bucket, "points": points if times else []},
+    }
 
 
 def _stats(summary) -> dict:

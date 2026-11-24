@@ -50,6 +50,14 @@ def draw_people(frame: np.ndarray, people, checkable: set[int]) -> np.ndarray:
     thickness = max(1, int(round(2 * scale)))
     line_w = max(2, int(round(3 * scale)))
     shown = [p for p in people if not getattr(p, "coasting", False)]
+    # A segmentation model gives each person an outline: tint it, so it still shows when the video is
+    # displayed small (a thin line alone disappears).
+    outlined = [p for p in shown if getattr(p, "mask", None) is not None]
+    if outlined:
+        tint = frame.copy()
+        for p in outlined:
+            cv2.fillPoly(tint, [np.round(p.mask).astype(np.int32)], GREEN if p.id in checkable else GREY)
+        cv2.addWeighted(tint, 0.35, frame, 0.65, 0, frame)
     for p in sorted(people, key=lambda p: p.box[1]):
         x1, y1, x2, y2 = p.box
         coasting = getattr(p, "coasting", False)
@@ -58,7 +66,8 @@ def draw_people(frame: np.ndarray, people, checkable: set[int]) -> np.ndarray:
         if coasting:
             continue
         if getattr(p, "mask", None) is not None:  # segmentation model: the outline used to hide neighbours
-            cv2.polylines(frame, [np.round(p.mask).astype(np.int32)], True, color, 1, cv2.LINE_AA)
+            cv2.polylines(frame, [np.round(p.mask).astype(np.int32)], True, color, max(2, int(round(2 * scale))),
+                          cv2.LINE_AA)
         text = f"#{p.id} {p.score:.2f}"
         (tw, th), base = cv2.getTextSize(text, FONT, scale * 0.8, thickness)
         tx = min(max(0, x1), max(0, w - tw - 8))

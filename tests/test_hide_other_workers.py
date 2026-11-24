@@ -258,3 +258,19 @@ def test_the_prompt_playground_repeats_a_check_with_the_neighbour_hidden(client)
 
     assert "1 other worker hidden" in recheck(True)["note"]
     assert "hidden" not in recheck(False)["note"]
+
+
+# ---- the person detection playground shows the outlines ----------------------------------------------
+def test_the_playground_tints_and_outlines_each_person_with_an_outline():
+    from ppe.people_playground import draw_people
+
+    frame = np.zeros((200, 400, 3), np.uint8)
+    with_outline = TrackedPerson(id=1, box=(20, 20, 140, 180), score=0.9, mask=rect(40, 30, 120, 170))
+    plain = TrackedPerson(id=2, box=(220, 20, 340, 180), score=0.9)
+    out = draw_people(frame, [with_outline, plain], checkable={1, 2})
+    assert out[100, 80].max() > 40  # inside the outline: tinted, visible at any size
+    assert out[100, 280].max() == 0  # inside a box without an outline: left as it is
+    assert out[100, 380].max() == 0  # nobody there
+    # The outline line itself is thick enough to survive a small display (at least 2 px).
+    row = out[100, 36:46]
+    assert (row[:, 1] > row[:, 1].min() + 30).sum() >= 2

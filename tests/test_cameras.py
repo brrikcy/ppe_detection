@@ -101,3 +101,15 @@ def test_frame_reader_can_sample_every_nth_frame(tmp_path):
     r.close()
     assert r.fps == 5 and r.frame_count == 20
     assert abs(n - 20) <= 3  # timestamp rounding at the end
+
+
+def test_pdf_report_lists_cameras_and_violations(client):
+    # With nothing started the report still builds.
+    r = client.get("/api/cameras/report")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+    assert r.content.startswith(b"%PDF") and "attachment" in r.headers["content-disposition"]
+
+    client.post("/api/cameras/start", json={"camera_ids": ["left_corner_2", "parking"], "analysis_interval_sec": 0.5})
+    _wait(lambda: client.get("/api/cameras").json()["violations"])
+    r = client.get("/api/cameras/report")
+    assert r.status_code == 200 and r.content.startswith(b"%PDF") and len(r.content) > 3000

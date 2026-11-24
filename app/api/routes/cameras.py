@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from ppe.config import parse_required
@@ -16,6 +17,7 @@ from ...services.cameras import CameraManager, StartOptions
 from ...services.dev_settings import DevSettingsStore
 from ...services.keys import MissingKey, endpoint_for, resolve_key
 from ...services.keys import KeyVerifier
+from ...services.report_pdf import build_camera_report
 from ..deps import get_cameras, get_dev_settings, get_key_verifier, get_settings
 from .runs import STREAM_WINDOW, _check_key
 
@@ -35,6 +37,16 @@ class StartRequest(BaseModel):
 def cameras_state(cameras: Cameras) -> dict:
     """Every camera, how the ones on the dashboard are doing, and the violations found so far."""
     return cameras.state()
+
+
+@router.get("/report")
+def camera_report(cameras: Cameras) -> Response:
+    """A PDF report of the camera wall: setup, totals, cameras and every violation with its photo."""
+    state = cameras.state()
+    pdf = build_camera_report(state, cameras.run_info, cameras.photo_of)
+    name = f"ppe_camera_report_{datetime.now():%Y%m%d_%H%M}.pdf"
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
 
 
 @router.post("/start")

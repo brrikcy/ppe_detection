@@ -103,6 +103,7 @@ class CameraManager:
         self._lock = threading.RLock()
         self._active: dict[str, Session] = {}
         self._history: dict[str, list[dict]] = {}  # finished loops' incidents, per camera
+        self.run_info: dict = {}  # what the cameras were last started with, for the report
         self._probe_cache: dict[tuple[str, float], tuple[float, float]] = {}  # (duration s, source fps)
         self._seq = 0
         # Photos are only meaningful for this server process: start from a clean folder.
@@ -165,6 +166,10 @@ class CameraManager:
     def start(self, ids: list[str], options: StartOptions) -> list[str]:
         """Puts cameras on the dashboard and starts their streams; returns the ids started now."""
         videos = self._videos()
+        self.run_info = {"required_ppe": list(options.required_ppe),
+                         "analysis_interval_sec": options.analysis_interval_sec,
+                         "model": getattr(options.tuning, "moondream_model", None),
+                         "settings_state": getattr(options.tuning, "settings_state", None)}
         started = []
         for cid in ids:
             if cid not in videos:
@@ -214,6 +219,12 @@ class CameraManager:
             for s in self._active.values():
                 self._drop_files(s.events)
                 s.events = []
+
+    def photo_of(self, event: dict) -> Path | None:
+        """The worker photo of a violation (for the report)."""
+        if not event.get("snapshot"):
+            return None
+        return self.image(event["camera_id"], event["token"], "snapshots", event["snapshot"])
 
     def feed(self, cid: str, size: str) -> LiveFeed | None:
         with self._lock:

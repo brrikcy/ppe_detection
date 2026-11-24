@@ -70,6 +70,7 @@ export const api = {
     }),
     remove: (id) => request(`/api/cameras/${encodeURIComponent(id)}`, { method: "DELETE" }),
     stopAll: () => request("/api/cameras/stop-all", { method: "POST" }),
+    reportUrl: "/api/cameras/report",
     clearViolations: () => request("/api/cameras/violations", { method: "DELETE" }),
     live: (id, size) => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/cameras/${encodeURIComponent(id)}/live?size=${size}`,
   },

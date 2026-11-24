@@ -11,6 +11,7 @@ const ALERT_MS = 5000; // a tile stays red this long after a new violation
 const BANNER_MS = 7000; // a violation alert stays on screen this long
 const MAX_BANNERS = 3; // alerts shown at once; the rest are counted
 const CLOSE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
+const DOWNLOAD_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12m0 0-4-4m4 4 4-4"/><path d="M4 18v1a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1"/></svg>`;
 const EXPAND_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>`;
 const REMOVE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>`;
 
@@ -103,6 +104,8 @@ export async function renderCameras(view) {
     menuBtn.textContent = menuOpen ? "Hide menu" : "Menu";
   }
 
+  const reportBtn = h("a", { class: "btn", href: api.cameras.reportUrl, download: "", title: "Download a PDF report of the detections so far" },
+    h("span", { html: DOWNLOAD_ICON }), "Download report");
   const addBtn = h("button", { type: "button", class: "btn btn-primary", onclick: () => setPanel(!panelOpen) }, "Add cameras");
   const stopAllBtn = h("button", { type: "button", class: "btn", onclick: stopAll }, "Remove all");
 
@@ -398,7 +401,7 @@ export async function renderCameras(view) {
     h("header", { class: "cam-head" },
       h("div", {}, h("span", { class: "eyebrow" }, "Site monitoring"), h("h1", {}, "Live camera wall"),
         h("p", { class: "hint" }, "Simulated RTSP cameras, each looping its video. Workers are tracked and PPE is checked live.")),
-      h("div", { class: "cam-head-actions" }, menuBtn, stopAllBtn, addBtn)),
+      h("div", { class: "cam-head-actions" }, menuBtn, stopAllBtn, reportBtn, addBtn)),
     h("div", { class: "cam-stats" }, sLive.el, sWorkers.el, sNow.el, sTotal.el),
     panel,
     h("div", { class: "cam-layout" },

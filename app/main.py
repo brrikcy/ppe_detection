@@ -12,11 +12,13 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from .api.routes import cameras as cameras_routes
 from .api.routes import config as config_routes
 from .api.routes import dev as dev_routes
 from .api.routes import people_lab as people_lab_routes
 from .api.routes import runs as runs_routes
 from .core.settings import Settings
+from .services.cameras import CameraManager
 from .services.dev_settings import DevSettingsStore
 from .services.keys import KeyVerifier, verify_key
 from .services.media import VideoConverter
@@ -52,6 +54,7 @@ def create_app(settings: Settings | None = None,
 
             threading.Thread(target=warm_up, args=(settings.person_model,), daemon=True).start()
         yield
+        app.state.cameras.shutdown()
         app.state.runner.shutdown()
         app.state.people_lab.shutdown()
 
@@ -68,11 +71,16 @@ def create_app(settings: Settings | None = None,
                                  person_model=settings.person_model,
                                  moondream_endpoint=settings.moondream_endpoint)
 
+    app.state.cameras = CameraManager(
+        settings.data_dir, settings.camera_dir or settings.data_dir / "_no_cameras", analyzer_factory,
+        people_factory=people_factory, person_model=settings.person_model,
+        fps=settings.camera_fps, detect_fps=settings.camera_detect_fps)
     app.state.people_lab = PeoplePlayground(settings.data_dir, people_factory=people_factory,
                                             default_model=settings.person_model)
 
     app.include_router(config_routes.router)
     app.include_router(runs_routes.router)
+    app.include_router(cameras_routes.router)
     app.include_router(dev_routes.router)
     app.include_router(people_lab_routes.router)
     # Registered last so /api routes take precedence.

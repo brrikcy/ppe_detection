@@ -22,6 +22,9 @@ class Settings:
     person_model: Path | None = None  # YOLO weights for person tracking; None = models/yolo11s.pt
     moondream_endpoint: str = DEFAULT_ENDPOINT  # where Moondream requests (and the server's API key) are sent
     cloud_endpoint: str = DEFAULT_ENDPOINT  # where requests with a key entered in the form are sent
+    camera_dir: Path | None = None  # simulated RTSP cameras: one looping video per camera
+    camera_fps: float = 8.0  # frames a second each simulated camera is processed at
+    camera_detect_fps: float = 3.0  # person detections a second, per camera
     warm_up_detector: bool = False  # load the person detector at startup (the real server does)
 
     @classmethod
@@ -35,5 +38,8 @@ class Settings:
             if os.getenv("PERSON_MODEL") else None,
             moondream_endpoint=endpoint_from_env(),
             cloud_endpoint=endpoint_from_env("MOONDREAM_CLOUD_ENDPOINT"),
+            camera_dir=Path(os.getenv("CAMERA_VIDEO_DIR", PROJECT_ROOT / "videos" / "cameras")).resolve(),
+            camera_fps=float(os.getenv("CAMERA_FPS", "8")),
+            camera_detect_fps=float(os.getenv("CAMERA_DETECT_FPS", "3")),
             warm_up_detector=True,
         )

@@ -152,14 +152,16 @@ class FrameReader:
 
     MAX_MEAN_DIFF = 8.0  # per pixel, 0-255; compression differences between decoders are ~1
 
-    def __init__(self, src: Path, max_height: int | None = None):
-        """With `max_height`, taller video is scaled down to it while decoding (e.g. 4K to 1080p)."""
+    def __init__(self, src: Path, max_height: int | None = None, every: int = 1):
+        """With `max_height`, taller video is scaled down to it while decoding (e.g. 4K to 1080p).
+        With `every` > 1 only every that-many-th frame is read, and `fps` and `frame_count` follow."""
         self.src = str(src)
+        self._every = max(1, int(every))
         cap = cv2.VideoCapture(self.src)
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video: {src}")
-        self.fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        self.frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.fps = (cap.get(cv2.CAP_PROP_FPS) or 25.0) / self._every
+        self.frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) // self._every
         ok, first = cap.read()
         cap.release()
         if not ok:
@@ -175,10 +177,14 @@ class FrameReader:
         self._pending = None  # first ffmpeg frame, already read for the comparison
         ffmpeg = find_ffmpeg()
         if ffmpeg:
-            scale = ["-vf", f"scale={self._size[0]}:{self._size[1]}:flags=area"] if self._size else []
+            filters = []
+            if self._size:
+                filters.append(f"scale={self._size[0]}:{self._size[1]}:flags=area")
+            scale = ["-vf", ",".join(filters)] if filters else []
+            rate = ["-r", f"{self.fps:.6f}"] if self._every > 1 else []  # drops to every n-th frame
             self._proc = subprocess.Popen(
                 [ffmpeg, "-loglevel", "error", "-nostdin", "-threads", "0", "-i", self.src, "-map", "0:v:0",
-                 *scale, "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"],
+                 *scale, *rate, "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=self._frame_bytes * 2)
             frame = self._read_ffmpeg()
             if frame is None or float(cv2.absdiff(frame, first).mean()) > self.MAX_MEAN_DIFF:
@@ -202,6 +208,9 @@ class FrameReader:
         """The next frame, or None at the end of the video."""
         if self._cap is not None:
             ok, frame = self._cap.read()
+            for _ in range(self._every - 1):
+                if ok:
+                    self._cap.grab()
             if ok and self._size:
                 frame = cv2.resize(frame, self._size, interpolation=cv2.INTER_AREA)
             return frame if ok else None

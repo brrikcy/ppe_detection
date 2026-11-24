@@ -67,6 +67,9 @@ If `opencv-python-headless` is already installed, Ultralytics' `opencv-python` d
 | `ANALYSIS_INTERVAL_SEC` | `1.0` | command line | Seconds between PPE checks. The web app takes it from the form. |
 | `PPE_DATA_DIR` | `runs/` | web app | Where runs are saved. |
 | `MAX_UPLOAD_MB` | `1024` | web app | Largest video the web app accepts. |
+| `CAMERA_VIDEO_DIR` | `videos/cameras/` | web app | Camera wall: one video per simulated camera (see [Live camera wall](#live-camera-wall)). |
+| `CAMERA_FPS` | `8` | web app | Camera wall: frames a second each camera is processed at. |
+| `CAMERA_DETECT_FPS` | `3` | web app | Camera wall: person detections a second, per camera. |
 
 ## Web app
 
@@ -156,6 +159,11 @@ people/          best view of each tracked worker, <id>.jpg
 | POST | `/api/runs/{id}/rerun` | JSON `{"settings": "current" or "original", "api_key"?}`: inspect the run's video again as a new run |
 | DELETE | `/api/runs/{id}` | Delete a finished run |
 | GET · PUT · DELETE | `/api/dev/tuning` | Read, save (JSON body) or reset the developer settings |
+| GET | `/api/cameras` | Camera wall: every camera, how the running ones are doing, totals and the violations found |
+| POST | `/api/cameras/start` | JSON `{camera_ids, api_key?, required_ppe, analysis_interval_sec}`: put cameras on the wall and start them |
+| DELETE | `/api/cameras/{id}` · POST `/api/cameras/stop-all` | Remove one camera, or all, from the wall |
+| DELETE | `/api/cameras/violations` | Clear the violation list |
+| WS | `/api/cameras/{id}/live?size=thumb\|full` | The camera's annotated frames, as JPEG messages |
 | POST | `/api/dev/try` | Multipart: `item`, `tuning?` (JSON), `api_key?`, and `image` or `run_id` + `folder` + `name`. Returns each step of one check. |
 
 Interactive docs: http://127.0.0.1:8000/docs
@@ -170,6 +178,7 @@ app/
   core/settings.py      server settings from env/.env
   schemas/runs.py       Pydantic request/response models
   services/
+    cameras.py          live camera wall: looping simulated cameras, their violations
     run_store.py        filesystem persistence of runs (meta.json never holds the key)
     runner.py           background execution, progress, preview, snapshots and person photos
     summary.py          dashboard metrics and per-person status from the report's timeline
@@ -214,6 +223,17 @@ Supported PPE items: `helmet`, `vest`, `gloves`, `boots`, `goggles` (default: `h
 Every request names its model (`moondream3.1-9B-A2B` by default; change it in Developer options or with `--model`). If the endpoint doesn't accept the model, a run is refused at the start (the key check sends one request with the same model), and a run that hits it mid-way stops with a message pointing to Developer options. Each run records the endpoint and model it used (`moondream_endpoint` and `tuning.moondream_model` in the report; the model is also shown on the run page).
 
 **Moondream Cloud is closing on 13 November 2026** ([Moondream's announcement](https://moondream.ai/blog/moondream-is-joining-prime-intellect)). To keep using Moondream after that, point `MOONDREAM_ENDPOINT` at a service with the same API, such as Prime Intellect's hosted Moondream, or a self-hosted Moondream server, and set the model ID that service uses. For keys entered in the form, set `MOONDREAM_CLOUD_ENDPOINT` to that service too.
+
+## Live camera wall
+
+**Live cameras** in the sidebar (`#cameras`) simulates a site's CCTV system from recorded video, for demos. Each video in `CAMERA_VIDEO_DIR` (default `videos/cameras/`, not in git) is one camera; the name comes from the file name without a site suffix (`left_corner_2-w1.mp4` is *Left Corner 2*).
+
+1. **Add cameras** lists every camera. Pick the ones to start (or **Start all**), the PPE items to require and how often each worker is checked. Cameras start one after the other.
+2. Once a camera is on the wall, the page takes the whole window (the sidebar is hidden; **Menu** brings it back) with the camera grid on top and the violation list below it. Each camera plays its video in an endless loop at the video's own speed, like an RTSP feed that never stops. Workers are tracked and checked on every camera at once, and the wall shows them live with boxes and tags.
+3. Click a tile (or its enlarge button) to see that camera large, with its own stats and violations; **Esc** closes it. The remove button on a tile, or **Remove from dashboard** in the enlarged view, stops that camera and takes it off the wall. **Remove all** clears the wall.
+4. **Violations** from every camera are listed below the grid as they are found, newest first, with the worker's photo, the camera, the missing items and the time. Click one for the full frame; filter by camera; **Clear** empties the list. A tile turns red when a violation is found on it. Removing a camera keeps its violations in the list. A violation seen again on the next loop of the video is listed again, marked with its loop number.
+
+It is a simulation inside the server: frames go straight from the video to the browser (WebSocket), no RTSP server is involved, and nothing is recorded to disk except the photos of violations (under `runs/_cameras/`, cleared when the server starts). Cameras are processed at `CAMERA_FPS` and 720 px, with `Fixed camera` on and at most `CAMERA_DETECT_FPS` detections a second, so many cameras fit on one machine; person detection takes turns between cameras. A CPU-only machine plays several cameras slower than real time (about 290 ms per detection for YOLO11s on 8 cores): use the [GPU server](#live-demo-on-a-gpu) for all 11. The settings in Developer options apply, except those above.
 
 ## Live mode
 

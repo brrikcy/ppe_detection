@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import urllib.request
 
 # Never pip-install anything or phone home from inside a run.
@@ -43,6 +44,9 @@ DOWNLOADABLE = {"yolo11n.pt", "yolo11s.pt", "yolo11m.pt", "yolo11n-cls.pt"}
 PERSON_CLASS = 0  # COCO "person"
 
 _models: dict[str, object] = {}
+# Models are shared by every tracker, and an Ultralytics model isn't safe to call from several
+# threads at once (live camera wall: one tracker per camera), so detections take turns.
+_predict_lock = threading.Lock()
 
 
 def ensure_model(path: Path) -> Path:
@@ -178,8 +182,9 @@ class YoloPersonTracker:
         return sorted(out, key=lambda p: p.box[0])
 
     def _detect(self, frame: np.ndarray, i: int) -> list[TrackedPerson]:
-        result = self._model.predict(frame, classes=[PERSON_CLASS], conf=self.conf, imgsz=self.imgsz,
-                                     verbose=False)[0]
+        with _predict_lock:
+            result = self._model.predict(frame, classes=[PERSON_CLASS], conf=self.conf, imgsz=self.imgsz,
+                                         verbose=False)[0]
         rows = self._tracker.update(result.boxes.cpu().numpy(), frame)
         h, w = frame.shape[:2]
         min_age = max(1, int(round(self.min_age_sec * self.fps / self._stride)))  # in detections

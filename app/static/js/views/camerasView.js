@@ -8,6 +8,8 @@ import { fmt, h, plural } from "../ui.js";
 
 const POLL_MS = 1500;
 const ALERT_MS = 5000; // a tile stays red this long after a new violation
+const BANNER_MS = 7000; // a violation alert stays on screen this long
+const MAX_BANNERS = 3; // alerts shown at once; the rest are counted
 const CLOSE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
 const EXPAND_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>`;
 const REMOVE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>`;
@@ -53,6 +55,32 @@ export async function renderCameras(view) {
   let filter = null; // camera id the violation list is limited to
   let enlarged = null; // {id, el, stop, close}
   const picked = new Set();
+
+  // ---- violation alert: a red glow around the whole window and a banner, wherever you are on the
+  // wall (also over an enlarged camera). It never takes focus or clicks, and goes away by itself.
+  const glow = h("div", { class: "cam-glow", "aria-hidden": "true" });
+  const banners = h("div", { class: "cam-banners", role: "alert", "aria-live": "assertive" });
+  document.body.append(glow, banners);
+  function raiseAlert(events) {
+    glow.classList.remove("is-on");
+    void glow.offsetWidth; // restart the animation for a new alert
+    glow.classList.add("is-on");
+    clearTimeout(glow.timer);
+    glow.timer = setTimeout(() => glow.classList.remove("is-on"), BANNER_MS);
+    const shown = events.slice(0, MAX_BANNERS);
+    for (const e of shown) {
+      const banner = h("div", { class: "cam-banner" },
+        h("b", {}, `${e.violations.join(", ")} detected`), ` at ${e.camera_name}`);
+      banners.prepend(banner);
+      setTimeout(() => banner.remove(), BANNER_MS);
+    }
+    if (events.length > shown.length) {
+      const more = h("div", { class: "cam-banner is-more" }, `+${events.length - shown.length} more violations`);
+      banners.prepend(more);
+      setTimeout(() => more.remove(), BANNER_MS);
+    }
+    while (banners.children.length > MAX_BANNERS + 1) banners.lastChild.remove();
+  }
   const ppeChoice = new Set(["helmet", "vest"]);
   let interval = "2";
 
@@ -339,9 +367,11 @@ export async function renderCameras(view) {
     applyFull();
     if (panelOpen) drawChips();
 
-    // A violation found while watching flags its tile.
+    // A violation found while watching flags its tile and raises the alert.
+    const fresh = [];
     for (const e of data.violations) {
       if (!seen.has(e.id) && !firstPoll) {
+        fresh.push(e);
         const tile = tiles.get(e.camera_id);
         if (tile) {
           tile.el.classList.add("is-alert");
@@ -351,6 +381,7 @@ export async function renderCameras(view) {
       }
       seen.add(e.id);
     }
+    if (fresh.length) raiseAlert(fresh.reverse()); // oldest first, so the newest ends up on top
     firstPoll = false;
   }
 
@@ -384,6 +415,9 @@ export async function renderCameras(view) {
     disposed = true;
     clearTimeout(timer);
     shell?.classList.remove("cam-full");
+    clearTimeout(glow.timer);
+    glow.remove();
+    banners.remove();
     enlarged?.close();
     for (const t of tiles.values()) { t.stop(); clearTimeout(t.alertTimer); }
     tiles.clear();
